@@ -1,33 +1,23 @@
 {
-  "name": "easy_auto_application_backend",
+  "name": "easy_auto_backend",
   "version": "1.0.0",
-  "main": "index.js",
+  "type": "module",
+  "description": "Backend for Easy Auto Application",
+  "main": "src/server.js",
   "scripts": {
+    "start": "node src/server.js",
+    "dev": "node src/server.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/Pasindumi/Easy_Auto_Application_Backend.git"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "bugs": {
-    "url": "https://github.com/Pasindumi/Easy_Auto_Application_Backend/issues"
-  },
-  "homepage": "https://github.com/Pasindumi/Easy_Auto_Application_Backend#readme",
-  "description": "",
   "dependencies": {
-    "bcrypt": "^6.0.0",
+    "@supabase/supabase-js": "^2.89.0",
+    "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
-    "dotenv": "^17.2.3",
-    "express": "^5.1.0",
-    "jsonwebtoken": "^9.0.2",
-    "mongoose": "^9.0.0",
-    "morgan": "^1.10.1",
-    "multer": "^2.0.2"
-  },
-  "devDependencies": {
-    "nodemon": "^3.1.11"
+    "dotenv": "^16.4.5",
+    "express": "^4.22.1",
+    "jsonwebtoken": "^9.0.3",
+    "morgan": "^1.10.0",
+    "multer": "^2.0.2",
+    "node-cron": "^3.0.3"
   }
 }
