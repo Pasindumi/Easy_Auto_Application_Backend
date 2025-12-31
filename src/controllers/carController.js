@@ -13,12 +13,16 @@ export const createAd = async (req, res) => {
         model,
         year,
         mileage,
-        engine_capacity,
-        fuel_type,
+        engineCapacity, // frontend camelCase
+        fuelType,
         transmission,
-        body_type,
+        bodyType,
         images, // Array of image URLs
     } = req.body;
+
+    const engine_capacity = engineCapacity;
+    const fuel_type = fuelType;
+    const body_type = bodyType;
 
     try {
         // 1. Create CarAd record
@@ -31,7 +35,7 @@ export const createAd = async (req, res) => {
                     price,
                     location,
                     description,
-                    status: "ACTIVE",
+                    status: req.body.status || "DRAFT",
                     expiry_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days expiry
                 },
             ])
@@ -86,6 +90,31 @@ export const createAd = async (req, res) => {
         res.status(201).json({ success: true, data: adData });
     } catch (error) {
         console.error("Error creating ad:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// Update Ad
+export const updateAd = async (req, res) => {
+    const { id } = req.params;
+    const updates = req.body;
+
+    // Filter out fields that shouldn't be updated directly if needed
+    // For now, allow updating status and other fields
+
+    try {
+        const { data, error } = await supabase
+            .from("CarAd")
+            .update(updates)
+            .eq("id", id)
+            .select()
+            .single();
+
+        if (error) throw error;
+
+        res.json({ success: true, data });
+    } catch (error) {
+        console.error("Error updating ad:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -162,7 +191,7 @@ export const getAdById = async (req, res) => {
     const { id } = req.params;
 
     try {
-        const { data, error } = await supabase
+        const { data: adData, error: adError } = await supabase
             .from("CarAd")
             .select(`
         *,
@@ -172,19 +201,36 @@ export const getAdById = async (req, res) => {
             .eq("id", id)
             .single();
 
-        if (error) throw error;
+        if (adError) throw adError;
 
-        if (!data) {
+        if (!adData) {
             return res.status(404).json({ success: false, message: "Ad not found" });
         }
 
+        // Fetch seller details separately
+        let sellerDetails = null;
+        if (adData.seller_id) {
+            const { data: userData, error: userError } = await supabase
+                .from("users")
+                .select("name, email, phone")
+                .eq("id", adData.seller_id)
+                .single();
+
+            if (!userError) {
+                sellerDetails = userData;
+            }
+        }
+
         // Increment view count (fire and forget)
-        supabase.rpc("increment_views", { row_id: id });
-        // Note: requires a Postgres function or simple update:
-        await supabase.from("CarAd").update({ views_count: data.views_count + 1 }).eq('id', id);
+        const newCount = (adData.views_count || 0) + 1;
+        await supabase.from("CarAd").update({ views_count: newCount }).eq('id', id);
 
+        const responseData = {
+            ...adData,
+            users: sellerDetails
+        };
 
-        res.json({ success: true, data });
+        res.json({ success: true, data: responseData });
     } catch (error) {
         console.error("Error fetching ad:", error);
         res.status(500).json({ success: false, message: error.message });
