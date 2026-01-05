@@ -6,6 +6,8 @@ dotenv.config();
 
 import carRoutes from './routes/carRoutes.js';
 import authRoutes from './routes/authRoutes.js';
+import adminRoutes from './routes/adminRoutes.js';
+import vehicleConfigRoutes from './routes/vehicleConfigRoutes.js';
 import startCronJobs from './utils/cronJobs.js';
 
 const app = express();
@@ -20,6 +22,8 @@ startCronJobs();
 // Routes
 app.use('/api/cars', carRoutes);
 app.use('/api/auth', authRoutes);
+app.use('/api/admin', adminRoutes);
+app.use('/api/vehicle-config', vehicleConfigRoutes);
 
 const PORT = process.env.PORT || 5000;
 
