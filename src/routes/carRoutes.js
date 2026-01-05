@@ -1,13 +1,20 @@
 import express from 'express';
-import supabase from '../config/supabase.js';
-import multer from 'multer';
-import { createAd, getAds, getAdById, updateAd } from '../controllers/carController.js';
+import { createAd, getAds, getAdById, updateAd, adminGetAds, adminUpdateAdStatus } from '../controllers/carController.js';
+import { protectAdmin } from '../middlewares/adminAuthMiddleware.js';
+import { protect } from '../middlewares/authMiddleware.js';
 
 const router = express.Router();
 
-router.post("/", createAd);
+// Public Routes
 router.get("/", getAds);
 router.get("/:id", getAdById);
-router.put("/:id", updateAd);
+
+// Public/User Routes (Create Ad - needs auth)
+router.post("/", protect, createAd);
+router.put("/:id", protect, updateAd);
+
+// Admin Routes
+router.get("/admin/all", protectAdmin, adminGetAds);
+router.put("/admin/:id/status", protectAdmin, adminUpdateAdStatus);
 
 export default router;

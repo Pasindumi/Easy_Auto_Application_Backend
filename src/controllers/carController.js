@@ -3,21 +3,29 @@ import supabase from '../config/supabase.js';
 // Create a new Car Ad
 export const createAd = async (req, res) => {
     const {
-        seller_id, // This should ideally come from auth token
+        seller_id,
         title,
         price,
         location,
         description,
+
+        // Static Car Details
         condition,
         brand,
         model,
         year,
         mileage,
-        engineCapacity, // frontend camelCase
+        engineCapacity,
         fuelType,
         transmission,
         bodyType,
-        images, // Array of image URLs
+
+        // New Dynamic Fields
+        vehicle_type_id,
+        dynamicAttributes, // Array of { attribute_id: uuid, value: any }
+
+        // Images
+        images,
     } = req.body;
 
     const engine_capacity = engineCapacity;
@@ -31,11 +39,12 @@ export const createAd = async (req, res) => {
             .insert([
                 {
                     seller_id,
+                    vehicle_type_id,
                     title,
                     price,
                     location,
                     description,
-                    status: req.body.status || "DRAFT",
+                    status: "DRAFT", // Default to DRAFT or PENDING_APPROVAL
                     expiry_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days expiry
                 },
             ])
@@ -46,7 +55,8 @@ export const createAd = async (req, res) => {
 
         const adId = adData.id;
 
-        // 2. Create CarDetails record
+        // 2. Create Static CarDetails record (Legacy/Standard support)
+        // Even with dynamic attributes, some core fields might still be useful statically or mapped
         const { error: detailsError } = await supabase.from("CarDetails").insert([
             {
                 ad_id: adId,
@@ -59,21 +69,41 @@ export const createAd = async (req, res) => {
                 fuel_type,
                 transmission,
                 body_type,
+                // vehicle_type string is legacy now, maybe derive from ID or skip. 
+                // Let's Skip vehicle_type text field if not strictly needed, or just pass simple text if frontend sends it.
             },
         ]);
 
         if (detailsError) {
-            // Rollback: delete the created ad if details fail (manual transaction)
             await supabase.from("CarAd").delete().eq("id", adId);
             throw detailsError;
         }
 
-        // 3. Insert Images
+        // 3. Insert Dynamic Attributes
+        if (dynamicAttributes && dynamicAttributes.length > 0) {
+            const attrRecords = dynamicAttributes.map(attr => ({
+                ad_id: adId,
+                attribute_id: attr.attribute_id,
+                value: String(attr.value) // Ensure value is stored as text
+            }));
+
+            const { error: attrError } = await supabase
+                .from('car_details_attribute_values')
+                .insert(attrRecords);
+
+            if (attrError) {
+                console.error("Error adding specific attributes:", attrError);
+                // Non-critical (?) or should rollback? 
+                // Ideally rollback, but for now log error.
+            }
+        }
+
+        // 4. Insert Images
         if (images && images.length > 0) {
             const imageRecords = images.map((url, index) => ({
                 ad_id: adId,
                 image_url: url,
-                is_primary: index === 0, // First image is primary
+                is_primary: index === 0,
             }));
 
             const { error: imageError } = await supabase
@@ -81,8 +111,6 @@ export const createAd = async (req, res) => {
                 .insert(imageRecords);
 
             if (imageError) {
-                // Log error but don't fail the whole request? Or full rollback?
-                // Let's log for now.
                 console.error("Error adding images:", imageError);
             }
         }
@@ -99,9 +127,6 @@ export const updateAd = async (req, res) => {
     const { id } = req.params;
     const updates = req.body;
 
-    // Filter out fields that shouldn't be updated directly if needed
-    // For now, allow updating status and other fields
-
     try {
         const { data, error } = await supabase
             .from("CarAd")
@@ -111,7 +136,6 @@ export const updateAd = async (req, res) => {
             .single();
 
         if (error) throw error;
-
         res.json({ success: true, data });
     } catch (error) {
         console.error("Error updating ad:", error);
@@ -119,51 +143,30 @@ export const updateAd = async (req, res) => {
     }
 };
 
-// Get all ads with filters and pagination
+// Get all ads (Public)
 export const getAds = async (req, res) => {
-    const { page = 1, limit = 10, brand, model, minPrice, maxPrice } = req.query;
+    const { page = 1, limit = 10, brand, model, minPrice, maxPrice, vehicleTypeId } = req.query;
     const start = (page - 1) * limit;
     const end = start + limit - 1;
 
     try {
-        let query = supabase
-            .from("CarAd")
-            .select(
-                `
-        *,
-        CarDetails!posts_ad_id_fkey (*),
-        AdImage!posts_ad_id_fkey_2 (*)
-      `,
-                { count: "exact" }
-            )
-            .eq("status", "ACTIVE")
-            .range(start, end);
-
-        // Note: Supabase joins usage depends on foreign key names if not specified.
-        // I used generic !fkey names in select just as placeholders.
-        // Better to use simple join if relations are clear in Supabase client.
-        // Let's retry with standard syntax trusting Supabase inference or adjusting if needed.
-
-        // Simpler join syntax:
         let queryBuilder = supabase
             .from("CarAd")
             .select(`
             *,
             CarDetails(*),
-            AdImage(*)
+            AdImage(*),
+            vehicle_type:vehicle_types(type_name)
         `, { count: 'exact' })
             .eq("status", "ACTIVE")
             .range(start, end);
 
-
-        // Apply Filters (Note: CarDetails filters are tricky with simple joins in Supabase JS on parent table usually)
-        // For simple filtering on child tables (like Brand), we might need inner joins or 'CarDetails.brand'.
-        // Supabase allows filtering on joined tables: .eq('CarDetails.brand', brand)
-
         if (minPrice) queryBuilder = queryBuilder.gte("price", minPrice);
         if (maxPrice) queryBuilder = queryBuilder.lte("price", maxPrice);
+        if (vehicleTypeId) queryBuilder = queryBuilder.eq('vehicle_type_id', vehicleTypeId);
 
-        // For child filters:
+        // For child filters (e.g. brand in CarDetails or vehicle_brands)
+        // If brand is passed and it's in CarDetails:
         if (brand) queryBuilder = queryBuilder.eq('CarDetails.brand', brand);
         if (model) queryBuilder = queryBuilder.eq('CarDetails.model', model);
 
@@ -196,7 +199,12 @@ export const getAdById = async (req, res) => {
             .select(`
         *,
         CarDetails(*),
-        AdImage(*)
+        AdImage(*),
+        vehicle_type:vehicle_types(*),
+        attributes:car_details_attribute_values(
+            value,
+            attribute:vehicle_attributes(attribute_name, unit, data_type)
+        )
       `)
             .eq("id", id)
             .single();
@@ -221,7 +229,7 @@ export const getAdById = async (req, res) => {
             }
         }
 
-        // Increment view count (fire and forget)
+        // Increment view count
         const newCount = (adData.views_count || 0) + 1;
         await supabase.from("CarAd").update({ views_count: newCount }).eq('id', id);
 
@@ -237,4 +245,75 @@ export const getAdById = async (req, res) => {
     }
 };
 
-// Update Ad is similar to Create but with .update()
+// --- ADMIN FUNCTIONS ---
+
+// Admin: Get All Ads (with filters for Status)
+export const adminGetAds = async (req, res) => {
+    const { page = 1, limit = 20, status, search } = req.query;
+    const start = (page - 1) * limit;
+    const end = start + limit - 1;
+
+    try {
+        let query = supabase
+            .from("CarAd")
+            .select(`
+                *,
+                vehicle_type:vehicle_types(type_name),
+                seller:users(name, email)
+            `, { count: 'exact' })
+            .range(start, end)
+            .order('created_at', { ascending: false });
+
+        if (status) {
+            query = query.eq('status', status);
+        }
+
+        if (search) {
+            query = query.ilike('title', `%${search}%`);
+        }
+
+        const { data, count, error } = await query;
+
+        if (error) throw error;
+
+        res.json({
+            success: true,
+            data,
+            pagination: {
+                total: count,
+                page: parseInt(page),
+                pages: Math.ceil(count / limit),
+            },
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// Admin: Update Ad Status (Approve, Reject, Expire)
+export const adminUpdateAdStatus = async (req, res) => {
+    const { id } = req.params;
+    // status: 'ACTIVE', 'REJECTED' (if added to enum), 'EXPIRED', 'PENDING'
+    const { status, is_featured, expiry_date } = req.body;
+
+    try {
+        const updates = {};
+        if (status) updates.status = status;
+        if (typeof is_featured !== 'undefined') updates.is_featured = is_featured;
+        if (expiry_date) updates.expiry_date = expiry_date;
+
+        const { data, error } = await supabase
+            .from("CarAd")
+            .update(updates)
+            .eq("id", id)
+            .select()
+            .single();
+
+        if (error) throw error;
+
+        res.json({ success: true, data });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
