@@ -117,6 +117,21 @@ alter table public.vehicle_brands enable row level security;
 drop policy if exists "Allow public all brands" on public.vehicle_brands;
 create policy "Allow public all brands" on public.vehicle_brands for all using (true);
 
+-- Vehicle Conditions
+create table if not exists public.vehicle_conditions (
+  id uuid default uuid_generate_v4() primary key,
+  vehicle_type_id uuid references public.vehicle_types(id) on delete cascade,
+  condition_name text not null,
+  status text default 'ACTIVE' check (status in ('ACTIVE', 'DISABLED')),
+  created_by_admin uuid references public.admins(id),
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+alter table public.vehicle_conditions enable row level security;
+
+drop policy if exists "Allow public all conditions" on public.vehicle_conditions;
+create policy "Allow public all conditions" on public.vehicle_conditions for all using (true);
+
 -- System Limits
 create table if not exists public.system_limits (
   id uuid default uuid_generate_v4() primary key,
@@ -159,6 +174,30 @@ create policy "Users can crud own ads" on public."CarAd" for all using (auth.uid
 
 drop policy if exists "Admins can all ads" on public."CarAd";
 create policy "Admins can all ads" on public."CarAd" for all using (true);
+
+-- CarDetails Table (Standard Attributes)
+create table if not exists public."CarDetails" (
+  id uuid default uuid_generate_v4() primary key,
+  ad_id uuid references public."CarAd"(id) on delete cascade,
+  condition text,
+  brand text,
+  model text,
+  year text,
+  mileage text,
+  engine_capacity text,
+  fuel_type text,
+  transmission text,
+  body_type text,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+alter table public."CarDetails" enable row level security;
+
+drop policy if exists "Public view details" on public."CarDetails";
+create policy "Public view details" on public."CarDetails" for select using (true);
+
+drop policy if exists "Users can crud own details" on public."CarDetails";
+create policy "Users can crud own details" on public."CarDetails" for all using (true);
 
 -- CarDetails Table (Dynamic Attributes)
 create table if not exists public.car_details_attribute_values (
