@@ -220,3 +220,76 @@ export const createModel = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
+
+// --- Vehicle Conditions ---
+
+export const getConditionsByType = async (req, res) => {
+    const { typeId } = req.params;
+    try {
+        const { data, error } = await supabase
+            .from('vehicle_conditions')
+            .select('*')
+            .eq('vehicle_type_id', typeId)
+            .eq('status', 'ACTIVE')
+            .order('condition_name', { ascending: true });
+
+        if (error) throw error;
+        res.json(data);
+    } catch (error) {
+        console.error('Vehicle Config Error:', error);
+        res.status(500).json({ message: error.message });
+    }
+};
+
+export const createCondition = async (req, res) => {
+    const { vehicle_type_id, condition_name } = req.body;
+    const adminId = req.user.id;
+
+    try {
+        const { data, error } = await supabase
+            .from('vehicle_conditions')
+            .insert([{ vehicle_type_id, condition_name, created_by_admin: adminId }])
+            .select()
+            .single();
+
+        if (error) throw error;
+        res.status(201).json(data);
+    } catch (error) {
+        console.error('Vehicle Config Error:', error);
+        res.status(500).json({ message: error.message });
+    }
+};
+
+export const deleteCondition = async (req, res) => {
+    const { id } = req.params;
+    try {
+        const { error } = await supabase
+            .from('vehicle_conditions')
+            .delete()
+            .eq('id', id);
+
+        if (error) throw error;
+        res.json({ success: true, message: 'Condition deleted' });
+    } catch (error) {
+        console.error('Vehicle Config Error:', error);
+        res.status(500).json({ message: error.message });
+    }
+};
+
+export const getModelsByBrand = async (req, res) => {
+    const { brandId } = req.params;
+    try {
+        const { data, error } = await supabase
+            .from('vehicle_models')
+            .select('*')
+            .eq('brand_id', brandId)
+            .eq('status', 'ACTIVE')
+            .order('model_name', { ascending: true });
+
+        if (error) throw error;
+        res.json(data);
+    } catch (error) {
+        console.error('Vehicle Config Error:', error);
+        res.status(500).json({ message: error.message });
+    }
+};

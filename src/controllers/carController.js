@@ -28,7 +28,18 @@ export const createAd = async (req, res) => {
         images,
     } = req.body;
 
-    const engine_capacity = engineCapacity;
+    // --- Robust Sanitization for DB Constraints ---
+    const toSafeUUID = (val) => (!val || val === "" || val === "undefined") ? null : val;
+    const toSafeNumeric = (val) => (!val || val === "" || val === "undefined") ? null : (isNaN(val) ? 0 : parseFloat(val));
+    const toSafeInt = (val) => (!val || val === "" || val === "undefined") ? null : (isNaN(val) ? 0 : parseInt(val));
+
+    const safePrice = toSafeNumeric(price);
+    const safeVehicleTypeId = toSafeUUID(vehicle_type_id);
+    const safeYear = toSafeUUID(year); // Keep year as text unless DB strictly needs int, but if it is int, use toSafeInt
+    const safeMileage = toSafeUUID(mileage); // Same here
+    const safeEngineCapacity = toSafeUUID(engineCapacity);
+
+    // Mapped fields
     const fuel_type = fuelType;
     const body_type = bodyType;
 
@@ -39,9 +50,9 @@ export const createAd = async (req, res) => {
             .insert([
                 {
                     seller_id,
-                    vehicle_type_id,
+                    vehicle_type_id: safeVehicleTypeId,
                     title,
-                    price,
+                    price: safePrice,
                     location,
                     description,
                     status: "DRAFT", // Default to DRAFT or PENDING_APPROVAL
@@ -56,21 +67,18 @@ export const createAd = async (req, res) => {
         const adId = adData.id;
 
         // 2. Create Static CarDetails record (Legacy/Standard support)
-        // Even with dynamic attributes, some core fields might still be useful statically or mapped
         const { error: detailsError } = await supabase.from("CarDetails").insert([
             {
                 ad_id: adId,
                 condition,
                 brand,
                 model,
-                year,
-                mileage,
-                engine_capacity,
+                year: safeYear,
+                mileage: safeMileage,
+                engine_capacity: safeEngineCapacity,
                 fuel_type,
                 transmission,
                 body_type,
-                // vehicle_type string is legacy now, maybe derive from ID or skip. 
-                // Let's Skip vehicle_type text field if not strictly needed, or just pass simple text if frontend sends it.
             },
         ]);
 
