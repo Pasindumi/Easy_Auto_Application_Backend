@@ -10,11 +10,13 @@
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
+    "@clerk/clerk-sdk-node": "^5.1.6",
     "@supabase/supabase-js": "^2.89.0",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.22.1",
+    "ioredis": "^5.9.1",
     "jsonwebtoken": "^9.0.3",
     "morgan": "^1.10.0",
     "multer": "^2.0.2",
