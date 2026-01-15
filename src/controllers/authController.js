@@ -1,192 +1,64 @@
 import supabase from '../config/supabase.js';
 import bcrypt from 'bcryptjs';
-import * as otpService from '../services/otpService.js';
 import * as clerkService from '../services/clerkService.js';
 import * as jwtService from '../services/jwtService.js';
 
 /**
  * Authentication Controller
- * Handles OTP-based authentication and Clerk social authentication
+ * Handles Clerk social authentication and email/password authentication
  */
 
 // ============================================
-// OTP AUTHENTICATION FLOW
+// HELPER FUNCTIONS
 // ============================================
 
 /**
- * Send OTP to phone number
- * POST /auth/send-otp
- * Body: { phone }
+ * Map Clerk external account provider to our auth_provider values
+ * Clerk provides: 'oauth_google', 'oauth_apple', 'oauth_facebook', etc.
  */
-export const sendOTP = async (req, res) => {
-    try {
-        const { phone } = req.body;
-
-        if (!phone) {
-            return res.status(400).json({ error: 'Phone number is required' });
-        }
-
-        // Validate phone format
-        if (!otpService.validatePhoneNumber(phone)) {
-            return res.status(400).json({
-                error: 'Invalid phone number format. Use E.164 format (e.g., +1234567890)'
-            });
-        }
-
-        // Check rate limiting
-        const isRateLimited = await otpService.checkRateLimit(phone);
-        if (isRateLimited) {
-            return res.status(429).json({
-                error: 'Too many OTP requests. Please try again later.',
-                retryAfter: 300 // 5 minutes
-            });
-        }
-
-        // Generate OTP
-        const otp = otpService.generateOTP();
-        const otpHash = await otpService.hashOTP(otp);
-
-        // Store OTP in Redis with TTL
-        await otpService.storeOTP(phone, otpHash);
-
-        // Set rate limit
-        await otpService.setRateLimit(phone);
-
-        // Send OTP via SMS
-        await otpService.sendOTPSMS(phone, otp);
-
-        res.status(200).json({
-            message: 'OTP sent successfully',
-            expiresIn: otpService.getOTPTTL(), // seconds
-            phone: phone
-        });
-
-    } catch (error) {
-        console.error('Send OTP Error:', error);
-
-        if (error.message.includes('Redis is not available')) {
-            return res.status(503).json({
-                error: 'OTP service temporarily unavailable. Please try again later or use alternative login method.',
-                details: 'Redis connection required. Please contact support.',
-                code: 'SERVICE_UNAVAILABLE'
-            });
-        }
-
-        res.status(500).json({ error: 'Failed to send OTP' });
+const mapClerkProviderToAuthProvider = (clerkUser) => {
+    // Check for external accounts in the Clerk user object
+    if (clerkUser.external_accounts && clerkUser.external_accounts.length > 0) {
+        const provider = clerkUser.external_accounts[0].provider;
+        
+        if (provider.includes('google')) return 'google';
+        if (provider.includes('apple')) return 'apple';
+        if (provider.includes('facebook')) return 'facebook';
     }
+    
+    // Default to 'clerk' if we can't determine specific provider
+    return 'clerk';
 };
 
 /**
- * Verify OTP and authenticate user
- * POST /auth/verify-otp
- * Body: { phone, otp }
+ * Validate email format
  */
-export const verifyOTP = async (req, res) => {
-    try {
-        const { phone, otp } = req.body;
+const isValidEmail = (email) => {
+    return email && email.includes('@') && email.length >= 3;
+};
 
-        if (!phone || !otp) {
-            return res.status(400).json({ error: 'Phone and OTP are required' });
-        }
+/**
+ * Validate password
+ */
+const isValidPassword = (password) => {
+    return password && password.length >= 6;
+};
 
-        // Get OTP data from Redis
-        const otpData = await otpService.getOTP(phone);
+/**
+ * Validate phone (optional, but if provided must be valid)
+ */
+const isValidPhone = (phone) => {
+    if (!phone) return true; // Phone is optional
+    const digitsOnly = phone.replace(/\D/g, '');
+    return digitsOnly.length >= 10;
+};
 
-        if (!otpData) {
-            return res.status(400).json({
-                error: 'No OTP found for this phone number or OTP has expired'
-            });
-        }
-
-        // Check attempts
-        if (otpService.checkOTPRateLimit(otpData.attempts)) {
-            await otpService.deleteOTP(phone);
-            return res.status(429).json({
-                error: 'Too many failed attempts. Please request a new OTP.'
-            });
-        }
-
-        // Verify OTP
-        const isValid = await otpService.verifyOTP(otp, otpData.hash);
-
-        if (!isValid) {
-            // Increment attempts
-            await otpService.incrementAttempts(phone);
-            return res.status(400).json({ error: 'Invalid OTP' });
-        }
-
-        // OTP verified - delete from Redis
-        await otpService.deleteOTP(phone);
-
-        // Find or create user
-        let { data: user, error: userError } = await supabase
-            .from('users')
-            .select('*')
-            .eq('phone', phone)
-            .single();
-
-        // If user doesn't exist, create new user
-        if (!user) {
-            const { data: newUser, error: createError } = await supabase
-                .from('users')
-                .insert([{
-                    phone,
-                    name: `User ${phone.slice(-4)}`,
-                    role: 'user',
-                    auth_provider: 'phone',
-                    phone_verified: true,
-                    avatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&h=200&fit=crop&auto=format"
-                }])
-                .select()
-                .single();
-
-            if (createError) {
-                throw createError;
-            }
-
-            user = newUser;
-        } else {
-            // Update last login and phone verified status
-            await supabase
-                .from('users')
-                .update({
-                    last_login: new Date().toISOString(),
-                    phone_verified: true
-                })
-                .eq('id', user.id);
-        }
-
-        // Generate JWT tokens
-        const tokens = await jwtService.generateTokenPair(user);
-
-        res.status(200).json({
-            message: 'Authentication successful',
-            accessToken: tokens.accessToken,
-            refreshToken: tokens.refreshToken,
-            user: {
-                id: user.id,
-                name: user.name,
-                email: user.email,
-                phone: user.phone,
-                avatar: user.avatar,
-                role: user.role,
-                is_premium: user.is_premium
-            }
-        });
-
-    } catch (error) {
-        console.error('Verify OTP Error:', error);
-
-        if (error.message.includes('Redis is not available')) {
-            return res.status(503).json({
-                error: 'OTP service temporarily unavailable. Please try again later or use alternative login method.',
-                details: 'Redis connection required. Please contact support.',
-                code: 'SERVICE_UNAVAILABLE'
-            });
-        }
-
-        res.status(500).json({ error: 'Failed to verify OTP' });
-    }
+/**
+ * Sanitize user object (remove sensitive data)
+ */
+const sanitizeUser = (user) => {
+    const { password, ...sanitized } = user;
+    return sanitized;
 };
 
 // ============================================
@@ -211,6 +83,7 @@ export const clerkAuth = async (req, res) => {
         if (!token) {
             console.log('❌ No token found in Authorization header');
             return res.status(400).json({
+                success: false,
                 error: 'Authorization header with Bearer token is required',
                 code: 'MISSING_TOKEN'
             });
@@ -226,6 +99,7 @@ export const clerkAuth = async (req, res) => {
             if (!payload || !payload.sub) {
                 console.log('❌ Token verification returned invalid payload');
                 return res.status(401).json({
+                    success: false,
                     error: 'Failed to verify with authentication provider',
                     code: 'AUTH_PROVIDER_ERROR'
                 });
@@ -236,10 +110,22 @@ export const clerkAuth = async (req, res) => {
         } catch (clerkError) {
             console.error('❌ Clerk verification error:', clerkError.message);
             console.error('Error details:', clerkError);
+            
+            // Provide more specific error messages to frontend
+            let errorMessage = 'Failed to verify with authentication provider';
+            if (clerkError.message?.includes('not signed in') || clerkError.message?.includes('Not signed in')) {
+                errorMessage = 'Not signed in with Clerk. Please authenticate again.';
+            } else if (clerkError.message?.includes('expired')) {
+                errorMessage = 'Clerk session expired. Please sign in again.';
+            } else if (clerkError.message?.includes('invalid')) {
+                errorMessage = 'Invalid Clerk session token.';
+            }
 
             return res.status(401).json({
-                error: 'Failed to verify with authentication provider',
-                code: 'AUTH_PROVIDER_ERROR'
+                success: false,
+                error: errorMessage,
+                code: 'AUTH_PROVIDER_ERROR',
+                details: clerkError.message
             });
         }
 
@@ -272,6 +158,17 @@ export const clerkAuth = async (req, res) => {
 
         console.log('📋 Extracted data:', { clerkUserId, email, phone, name });
 
+        // Determine the auth provider from Clerk user data
+        // Try to get full Clerk user to determine provider
+        let authProvider = 'clerk'; // default
+        try {
+            const fullClerkUser = await clerkService.getUser(clerkUserId);
+            authProvider = mapClerkProviderToAuthProvider(fullClerkUser);
+            console.log('🔐 Determined auth provider:', authProvider);
+        } catch (err) {
+            console.warn('⚠️  Could not determine specific provider, using default: clerk');
+        }
+
         // Account merging logic - priority: clerk_user_id → email → phone
         let user = null;
 
@@ -295,12 +192,51 @@ export const clerkAuth = async (req, res) => {
                 const { data: emailMatch } = await supabase
                     .from('users')
                     .select('*')
-                    .eq('email', email)
+                    .eq('email', email.toLowerCase().trim())
                     .single();
 
                 existingUser = emailMatch;
                 if (existingUser) {
                     console.log('✅ Found existing user by email:', existingUser.id);
+                    console.log('📝 Existing auth_provider:', existingUser.auth_provider);
+                    
+                    // MERGE RULE: Attach clerk_user_id to existing user
+                    // Update auth_provider to social provider
+                    // Do NOT overwrite password if it exists
+                    console.log('🔄 Merging social login with existing account...');
+                    const updateData = {
+                        clerk_user_id: clerkUserId,
+                        auth_provider: authProvider,
+                        email: email || existingUser.email,
+                        name: name || existingUser.name,
+                        avatar: imageUrl || existingUser.avatar,
+                        phone: phone || existingUser.phone,
+                        last_login: new Date().toISOString()
+                    };
+                    
+                    // Only update password if user doesn't have one
+                    if (!existingUser.password) {
+                        updateData.password = null;
+                    }
+                    
+                    const { data: updatedUser, error: updateError } = await supabase
+                        .from('users')
+                        .update(updateData)
+                        .eq('id', existingUser.id)
+                        .select()
+                        .single();
+
+                    if (updateError) {
+                        console.error('❌ User update error:', updateError);
+                        return res.status(500).json({
+                            success: false,
+                            error: 'Failed to update user',
+                            code: 'DATABASE_ERROR'
+                        });
+                    }
+
+                    console.log('✅ User merged successfully');
+                    user = updatedUser;
                 }
             }
 
@@ -316,17 +252,27 @@ export const clerkAuth = async (req, res) => {
                 existingUser = phoneMatch;
                 if (existingUser) {
                     console.log('✅ Found existing user by phone:', existingUser.id);
-                    // Match found - update clerk_user_id if missing
-                    console.log('🔄 Updating user with clerk_user_id...');
+                    
+                    // MERGE RULE: Attach clerk_user_id
+                    console.log('🔄 Updating user with clerk_user_id and social provider...');
+                    const updateData = {
+                        clerk_user_id: clerkUserId,
+                        auth_provider: authProvider,
+                        email: email || existingUser.email,
+                        name: name || existingUser.name,
+                        avatar: imageUrl || existingUser.avatar,
+                        phone: phone || existingUser.phone,
+                        last_login: new Date().toISOString()
+                    };
+                    
+                    // Only update password if user doesn't have one
+                    if (!existingUser.password) {
+                        updateData.password = null;
+                    }
+                    
                     const { data: updatedUser, error: updateError } = await supabase
                         .from('users')
-                        .update({
-                            clerk_user_id: clerkUserId,
-                            email: email || existingUser.email,
-                            name: name || existingUser.name,
-                            avatar: imageUrl || existingUser.avatar,
-                            phone: phone || existingUser.phone
-                        })
+                        .update(updateData)
                         .eq('id', existingUser.id)
                         .select()
                         .single();
@@ -334,6 +280,7 @@ export const clerkAuth = async (req, res) => {
                     if (updateError) {
                         console.error('❌ User update error:', updateError);
                         return res.status(500).json({
+                            success: false,
                             error: 'Failed to update user',
                             code: 'DATABASE_ERROR'
                         });
@@ -345,12 +292,8 @@ export const clerkAuth = async (req, res) => {
             }
 
             if (!existingUser) {
-                // No match - create new user
-                console.log('➕ Creating new user...');
-
-                // Satisfy NOT NULL password constraint for social users
-                // Use a random password as a placeholder
-                const dummyPassword = await bcrypt.hash(Math.random().toString(36).slice(-10), 10);
+                // No match - create new social user
+                console.log('➕ Creating new social user...');
 
                 const { data: newUser, error: createError } = await supabase
                     .from('users')
@@ -360,8 +303,10 @@ export const clerkAuth = async (req, res) => {
                         phone: phone,
                         name: name || 'User',
                         avatar: imageUrl,
-                        password: dummyPassword, // Required by DB schema
-                        role: 'user', // Must be 'user' or 'admin' per DB check constraint
+                        password: null, // Social users don't have passwords
+                        auth_provider: authProvider, // google/apple/facebook/clerk
+                        role: 'user',
+                        is_premium: false,
                         created_at: new Date().toISOString()
                     }])
                     .select()
@@ -370,6 +315,7 @@ export const clerkAuth = async (req, res) => {
                 if (createError) {
                     console.error('❌ User creation error:', createError);
                     return res.status(500).json({
+                        success: false,
                         error: 'Failed to create user',
                         code: 'DATABASE_ERROR'
                     });
@@ -387,19 +333,32 @@ export const clerkAuth = async (req, res) => {
         const tokens = await jwtService.generateTokenPair(user);
         console.log('✅ JWT tokens generated successfully');
 
-        // Return accessToken, refreshToken, and user object
+        // Update last_login (non-blocking)
+        supabase
+            .from('users')
+            .update({ last_login: new Date().toISOString() })
+            .eq('id', user.id)
+            .then(() => {})
+            .catch(err => console.warn('Failed to update last_login:', err));
+
+        // Sanitize and return user (no password in response)
+        const sanitizedUser = sanitizeUser(user);
+
+        // Return accessToken, refreshToken, and user object (matching frontend expectations)
         console.log('=== Clerk OAuth Success ===');
         res.status(200).json({
+            success: true,
             accessToken: tokens.accessToken,
             refreshToken: tokens.refreshToken,
             user: {
-                id: user.id,
-                email: user.email,
-                phone: user.phone,
-                name: user.name,
-                avatar: user.avatar,
-                clerk_user_id: user.clerk_user_id,
-                role: user.role
+                id: sanitizedUser.id,
+                email: sanitizedUser.email,
+                phone: sanitizedUser.phone,
+                name: sanitizedUser.name,
+                avatar: sanitizedUser.avatar,
+                role: sanitizedUser.role,
+                is_premium: sanitizedUser.is_premium || false,
+                auth_provider: sanitizedUser.auth_provider
             }
         });
 
@@ -407,8 +366,10 @@ export const clerkAuth = async (req, res) => {
         console.error('❌ Clerk Auth Error:', error);
 
         res.status(500).json({
+            success: false,
             error: 'Internal server error',
-            code: 'SERVER_ERROR'
+            code: 'SERVER_ERROR',
+            details: error.message
         });
     }
 };
@@ -551,129 +512,243 @@ export const logoutAll = async (req, res) => {
 };
 
 // ============================================
-// LEGACY SUPPORT (Keep for backward compatibility)
+// EMAIL/PASSWORD AUTHENTICATION
 // ============================================
 
 /**
- * Legacy signup endpoint
+ * Normal Email/Password Signup
  * POST /auth/signup
+ * Body: { name, email, phone (optional), password }
  */
 export const signup = async (req, res) => {
     try {
         const { name, email, phone, password } = req.body;
 
-        if (!email || !password || !name) {
-            return res.status(400).json({ error: 'Name, email, and password are required' });
+        // Validate required fields
+        if (!name || !email || !password) {
+            return res.status(400).json({ 
+                error: 'Name, email, and password are required' 
+            });
         }
 
-        // Check if user already exists
-        const { data: existingUser } = await supabase
+        // Validate name
+        if (name.trim().length < 2) {
+            return res.status(400).json({ 
+                error: 'Name must be at least 2 characters long' 
+            });
+        }
+
+        // Validate email format
+        if (!isValidEmail(email)) {
+            return res.status(400).json({ 
+                error: 'Invalid email format. Email must contain "@"' 
+            });
+        }
+
+        // Validate password strength
+        if (!isValidPassword(password)) {
+            return res.status(400).json({ 
+                error: 'Password must be at least 6 characters long' 
+            });
+        }
+
+        // Validate phone if provided
+        if (phone && !isValidPhone(phone)) {
+            return res.status(400).json({ 
+                error: 'Invalid phone number. Must contain at least 10 digits' 
+            });
+        }
+
+        // Check if user already exists (email must be unique)
+        const { data: existingUser, error: checkError } = await supabase
             .from('users')
-            .select('*')
-            .eq('email', email)
+            .select('id, email')
+            .eq('email', email.toLowerCase().trim())
             .single();
 
         if (existingUser) {
-            return res.status(400).json({ error: 'User with this email already exists' });
+            return res.status(400).json({ 
+                error: 'User with this email already exists' 
+            });
         }
 
-        // Hash password
+        // Hash password with bcrypt (cost factor 10)
         const hashedPassword = await bcrypt.hash(password, 10);
 
-        // Create user
+        // Create user with auth_provider='password' and clerk_user_id = NULL (normal email/password signup)
         const { data: newUser, error: createError } = await supabase
             .from('users')
             .insert([{
-                name,
-                email,
-                phone,
+                name: name.trim(),
+                email: email.toLowerCase().trim(),
+                phone: phone ? phone.trim() : null,
                 password: hashedPassword,
+                auth_provider: 'password', // Email/password authentication
+                clerk_user_id: null, // NULL for password auth (only used for social login)
                 role: 'user',
-                auth_provider: 'email',
-                avatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&h=200&fit=crop&auto=format"
+                is_premium: false,
+                avatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&h=200&fit=crop&auto=format",
+                created_at: new Date().toISOString()
             }])
             .select()
             .single();
 
         if (createError) {
+            console.error('Database error during signup:', createError);
+            
+            // Check for specific DB errors
+            if (createError.code === '23505') { // Unique constraint violation
+                return res.status(400).json({ 
+                    error: 'User with this email already exists' 
+                });
+            }
+            
             throw createError;
         }
 
-        // Generate JWT tokens
+        if (!newUser) {
+            throw new Error('Failed to create user - no data returned');
+        }
+
+        console.log('✅ New user created:', newUser.id, newUser.email);
+
+        // Generate backend JWT access and refresh tokens
         const tokens = await jwtService.generateTokenPair(newUser);
 
+        if (!tokens || !tokens.accessToken || !tokens.refreshToken) {
+            throw new Error('Failed to generate authentication tokens');
+        }
+
+        // Sanitize and return user data (no password in response)
+        const sanitizedUser = sanitizeUser(newUser);
+
         res.status(201).json({
-            message: 'User created successfully',
-            ...tokens,
+            accessToken: tokens.accessToken,
+            refreshToken: tokens.refreshToken,
             user: {
-                id: newUser.id,
-                name: newUser.name,
-                email: newUser.email,
-                phone: newUser.phone,
-                avatar: newUser.avatar,
-                role: newUser.role
+                id: sanitizedUser.id,
+                name: sanitizedUser.name,
+                email: sanitizedUser.email,
+                phone: sanitizedUser.phone,
+                avatar: sanitizedUser.avatar,
+                role: sanitizedUser.role,
+                is_premium: sanitizedUser.is_premium || false,
+                auth_provider: sanitizedUser.auth_provider
             }
         });
 
     } catch (error) {
-        console.error('Signup Error:', error);
-        res.status(500).json({ error: 'Server error during signup' });
+        console.error('❌ Signup Error:', error);
+        
+        // Don't leak internal error details to client
+        res.status(500).json({ 
+            error: 'Server error during signup. Please try again later.' 
+        });
     }
 };
 
 /**
- * Legacy login endpoint
+ * Normal Email/Password Login
  * POST /auth/login
+ * Body: { email, password }
  */
 export const login = async (req, res) => {
     try {
         const { email, password } = req.body;
 
+        // Validate required fields
         if (!email || !password) {
-            return res.status(400).json({ error: 'Email and password are required' });
+            return res.status(400).json({ 
+                error: 'Email and password are required' 
+            });
         }
 
-        // Find user
-        const { data: user, error } = await supabase
+        // Validate email format
+        if (!isValidEmail(email)) {
+            return res.status(400).json({ 
+                error: 'Invalid email format' 
+            });
+        }
+
+        // Find user by email
+        const { data: user, error: fetchError } = await supabase
             .from('users')
             .select('*')
-            .eq('email', email)
+            .eq('email', email.toLowerCase().trim())
             .single();
 
-        if (error || !user || !user.password) {
-            return res.status(401).json({ error: 'Invalid credentials' });
+        // Generic error message to prevent user enumeration
+        const invalidCredsMessage = 'Invalid email or password';
+
+        if (fetchError || !user) {
+            return res.status(401).json({ error: invalidCredsMessage });
         }
 
-        // Verify password
+        // CRITICAL: Check if user registered with password auth
+        // Users with social-only accounts (google/apple/facebook/clerk) cannot login with password
+        if (user.auth_provider !== 'password') {
+            return res.status(401).json({ 
+                error: `This account uses ${user.auth_provider} login. Please sign in with your ${user.auth_provider} account.`,
+                code: 'SOCIAL_LOGIN_REQUIRED',
+                provider: user.auth_provider
+            });
+        }
+
+        // Check if user has a password (should always exist for auth_provider='password')
+        if (!user.password) {
+            console.error('❌ Data inconsistency: auth_provider=password but no password hash found');
+            return res.status(401).json({ 
+                error: 'Account data error. Please contact support.' 
+            });
+        }
+
+        // Verify password with bcrypt
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) {
-            return res.status(401).json({ error: 'Invalid credentials' });
+            return res.status(401).json({ error: invalidCredsMessage });
         }
 
-        // Update last login
-        await supabase
+        console.log('✅ User logged in:', user.id, user.email);
+
+        // Update last login timestamp (non-blocking)
+        supabase
             .from('users')
             .update({ last_login: new Date().toISOString() })
-            .eq('id', user.id);
+            .eq('id', user.id)
+            .then(() => {})
+            .catch(err => console.warn('Failed to update last_login:', err));
 
-        // Generate JWT tokens
+        // Generate backend JWT access and refresh tokens
         const tokens = await jwtService.generateTokenPair(user);
 
-        res.json({
-            message: 'Login successful',
-            ...tokens,
+        if (!tokens || !tokens.accessToken || !tokens.refreshToken) {
+            throw new Error('Failed to generate authentication tokens');
+        }
+
+        // Sanitize and return user data (no password in response)
+        const sanitizedUser = sanitizeUser(user);
+
+        res.status(200).json({
+            accessToken: tokens.accessToken,
+            refreshToken: tokens.refreshToken,
             user: {
-                id: user.id,
-                name: user.name,
-                email: user.email,
-                phone: user.phone,
-                avatar: user.avatar,
-                role: user.role
+                id: sanitizedUser.id,
+                name: sanitizedUser.name,
+                email: sanitizedUser.email,
+                phone: sanitizedUser.phone,
+                avatar: sanitizedUser.avatar,
+                role: sanitizedUser.role,
+                is_premium: sanitizedUser.is_premium || false,
+                auth_provider: sanitizedUser.auth_provider
             }
         });
 
     } catch (error) {
-        console.error('Login Error:', error);
-        res.status(500).json({ error: 'Server error during login' });
+        console.error('❌ Login Error:', error);
+        
+        // Don't leak internal error details to client
+        res.status(500).json({ 
+            error: 'Server error during login. Please try again later.' 
+        });
     }
 };

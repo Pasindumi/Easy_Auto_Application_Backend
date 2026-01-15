@@ -1,8 +1,5 @@
 import express from 'express';
 import {
-    // OTP Authentication
-    sendOTP,
-    verifyOTP,
     // Clerk Social Authentication
     clerkAuth,
     // Token Management
@@ -24,13 +21,7 @@ const router = express.Router();
 router.get('/me', protect, getCurrentUser);
 
 // ============================================
-// OTP AUTHENTICATION (PRIMARY METHOD)
-// ============================================
-router.post('/send-otp', sendOTP);
-router.post('/verify-otp', verifyOTP);
-
-// ============================================
-// CLERK SOCIAL AUTHENTICATION
+// CLERK SOCIAL AUTHENTICATION (PRIMARY METHOD)
 // ============================================
 router.post('/clerk', clerkAuth);
 
