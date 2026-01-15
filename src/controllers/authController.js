@@ -28,15 +28,15 @@ export const sendOTP = async (req, res) => {
 
         // Validate phone format
         if (!otpService.validatePhoneNumber(phone)) {
-            return res.status(400).json({ 
-                error: 'Invalid phone number format. Use E.164 format (e.g., +1234567890)' 
+            return res.status(400).json({
+                error: 'Invalid phone number format. Use E.164 format (e.g., +1234567890)'
             });
         }
 
         // Check rate limiting
         const isRateLimited = await otpService.checkRateLimit(phone);
         if (isRateLimited) {
-            return res.status(429).json({ 
+            return res.status(429).json({
                 error: 'Too many OTP requests. Please try again later.',
                 retryAfter: 300 // 5 minutes
             });
@@ -63,15 +63,15 @@ export const sendOTP = async (req, res) => {
 
     } catch (error) {
         console.error('Send OTP Error:', error);
-        
+
         if (error.message.includes('Redis is not available')) {
-            return res.status(503).json({ 
+            return res.status(503).json({
                 error: 'OTP service temporarily unavailable. Please try again later or use alternative login method.',
                 details: 'Redis connection required. Please contact support.',
                 code: 'SERVICE_UNAVAILABLE'
             });
         }
-        
+
         res.status(500).json({ error: 'Failed to send OTP' });
     }
 };
@@ -93,16 +93,16 @@ export const verifyOTP = async (req, res) => {
         const otpData = await otpService.getOTP(phone);
 
         if (!otpData) {
-            return res.status(400).json({ 
-                error: 'No OTP found for this phone number or OTP has expired' 
+            return res.status(400).json({
+                error: 'No OTP found for this phone number or OTP has expired'
             });
         }
 
         // Check attempts
         if (otpService.checkOTPRateLimit(otpData.attempts)) {
             await otpService.deleteOTP(phone);
-            return res.status(429).json({ 
-                error: 'Too many failed attempts. Please request a new OTP.' 
+            return res.status(429).json({
+                error: 'Too many failed attempts. Please request a new OTP.'
             });
         }
 
@@ -149,7 +149,7 @@ export const verifyOTP = async (req, res) => {
             // Update last login and phone verified status
             await supabase
                 .from('users')
-                .update({ 
+                .update({
                     last_login: new Date().toISOString(),
                     phone_verified: true
                 })
@@ -176,15 +176,15 @@ export const verifyOTP = async (req, res) => {
 
     } catch (error) {
         console.error('Verify OTP Error:', error);
-        
+
         if (error.message.includes('Redis is not available')) {
-            return res.status(503).json({ 
+            return res.status(503).json({
                 error: 'OTP service temporarily unavailable. Please try again later or use alternative login method.',
                 details: 'Redis connection required. Please contact support.',
                 code: 'SERVICE_UNAVAILABLE'
             });
         }
-        
+
         res.status(500).json({ error: 'Failed to verify OTP' });
     }
 };
@@ -204,13 +204,13 @@ export const clerkAuth = async (req, res) => {
         console.log('=== Clerk OAuth Request ===');
         console.log('Received Authorization:', req.headers.authorization?.substring(0, 50) + '...');
         console.log('CLERK_SECRET_KEY exists:', !!process.env.CLERK_SECRET_KEY);
-        
+
         // Extract token from Authorization header
         const token = req.headers.authorization?.split(' ')[1];
-        
+
         if (!token) {
             console.log('❌ No token found in Authorization header');
-            return res.status(400).json({ 
+            return res.status(400).json({
                 error: 'Authorization header with Bearer token is required',
                 code: 'MISSING_TOKEN'
             });
@@ -218,26 +218,26 @@ export const clerkAuth = async (req, res) => {
 
         // Verify Clerk session token using @clerk/backend
         let payload;
-        
+
         try {
             console.log('🔍 Verifying token with Clerk...');
             payload = await clerkService.verifyClerkToken(token);
-            
+
             if (!payload || !payload.sub) {
                 console.log('❌ Token verification returned invalid payload');
-                return res.status(401).json({ 
+                return res.status(401).json({
                     error: 'Failed to verify with authentication provider',
                     code: 'AUTH_PROVIDER_ERROR'
                 });
             }
-            
+
             console.log('✅ Token verified successfully');
             console.log('Clerk User ID:', payload.sub);
         } catch (clerkError) {
             console.error('❌ Clerk verification error:', clerkError.message);
             console.error('Error details:', clerkError);
-            
-            return res.status(401).json({ 
+
+            return res.status(401).json({
                 error: 'Failed to verify with authentication provider',
                 code: 'AUTH_PROVIDER_ERROR'
             });
@@ -245,12 +245,29 @@ export const clerkAuth = async (req, res) => {
 
         // Extract user data from token payload
         const clerkUserId = payload.sub;
-        const email = payload.email || null;
-        const firstName = payload.first_name || null;
-        const lastName = payload.last_name || null;
-        const imageUrl = payload.image_url || payload.avatar_url || null;
-        const phone = payload.phone_number || null;
-        
+        let email = payload.email || null;
+        let firstName = payload.first_name || null;
+        let lastName = payload.last_name || null;
+        let imageUrl = payload.image_url || payload.avatar_url || null;
+        let phone = payload.phone_number || null;
+
+        // CRITICAL: If data is missing (common with default session tokens), 
+        // fetch the full profile from Clerk Backend API
+        if (!email || !firstName) {
+            console.log('⚠️  User data missing in token. Fetching full profile from Clerk...');
+            try {
+                const fullUser = await clerkService.getUser(clerkUserId);
+                email = email || fullUser.email;
+                firstName = firstName || fullUser.first_name;
+                lastName = lastName || fullUser.last_name;
+                imageUrl = imageUrl || fullUser.image_url;
+                phone = phone || fullUser.phone_number;
+                console.log('✅ Full profile retrieved:', { email, firstName, lastName });
+            } catch (err) {
+                console.warn('⚠️  Could not fetch full Clerk profile. Proceeding with token data.');
+            }
+        }
+
         const name = [firstName, lastName].filter(Boolean).join(' ') || null;
 
         console.log('📋 Extracted data:', { clerkUserId, email, phone, name });
@@ -272,7 +289,7 @@ export const clerkAuth = async (req, res) => {
         } else {
             // 2. Try to find by email
             let existingUser = null;
-            
+
             if (email) {
                 console.log('🔍 Looking up user by email...');
                 const { data: emailMatch } = await supabase
@@ -280,7 +297,7 @@ export const clerkAuth = async (req, res) => {
                     .select('*')
                     .eq('email', email)
                     .single();
-                
+
                 existingUser = emailMatch;
                 if (existingUser) {
                     console.log('✅ Found existing user by email:', existingUser.id);
@@ -295,42 +312,46 @@ export const clerkAuth = async (req, res) => {
                     .select('*')
                     .eq('phone', phone)
                     .single();
-                
+
                 existingUser = phoneMatch;
                 if (existingUser) {
                     console.log('✅ Found existing user by phone:', existingUser.id);
+                    // Match found - update clerk_user_id if missing
+                    console.log('🔄 Updating user with clerk_user_id...');
+                    const { data: updatedUser, error: updateError } = await supabase
+                        .from('users')
+                        .update({
+                            clerk_user_id: clerkUserId,
+                            email: email || existingUser.email,
+                            name: name || existingUser.name,
+                            avatar: imageUrl || existingUser.avatar,
+                            phone: phone || existingUser.phone
+                        })
+                        .eq('id', existingUser.id)
+                        .select()
+                        .single();
+
+                    if (updateError) {
+                        console.error('❌ User update error:', updateError);
+                        return res.status(500).json({
+                            error: 'Failed to update user',
+                            code: 'DATABASE_ERROR'
+                        });
+                    }
+
+                    console.log('✅ User updated successfully');
+                    user = updatedUser;
                 }
             }
 
-            if (existingUser) {
-                // Match found - update clerk_user_id if missing
-                console.log('🔄 Updating user with clerk_user_id...');
-                const { data: updatedUser, error: updateError } = await supabase
-                    .from('users')
-                    .update({
-                        clerk_user_id: clerkUserId,
-                        email: email || existingUser.email,
-                        name: name || existingUser.name,
-                        avatar: imageUrl || existingUser.avatar,
-                        phone: phone || existingUser.phone
-                    })
-                    .eq('id', existingUser.id)
-                    .select()
-                    .single();
-
-                if (updateError) {
-                    console.error('❌ User update error:', updateError);
-                    return res.status(500).json({ 
-                        error: 'Failed to update user',
-                        code: 'DATABASE_ERROR'
-                    });
-                }
-                
-                console.log('✅ User updated successfully');
-                user = updatedUser;
-            } else {
+            if (!existingUser) {
                 // No match - create new user
                 console.log('➕ Creating new user...');
+
+                // Satisfy NOT NULL password constraint for social users
+                // Use a random password as a placeholder
+                const dummyPassword = await bcrypt.hash(Math.random().toString(36).slice(-10), 10);
+
                 const { data: newUser, error: createError } = await supabase
                     .from('users')
                     .insert([{
@@ -339,7 +360,8 @@ export const clerkAuth = async (req, res) => {
                         phone: phone,
                         name: name || 'User',
                         avatar: imageUrl,
-                        role: 'buyer',
+                        password: dummyPassword, // Required by DB schema
+                        role: 'user', // Must be 'user' or 'admin' per DB check constraint
                         created_at: new Date().toISOString()
                     }])
                     .select()
@@ -347,14 +369,16 @@ export const clerkAuth = async (req, res) => {
 
                 if (createError) {
                     console.error('❌ User creation error:', createError);
-                    return res.status(500).json({ 
+                    return res.status(500).json({
                         error: 'Failed to create user',
                         code: 'DATABASE_ERROR'
                     });
                 }
-                
+
                 console.log('✅ New user created:', newUser.id);
                 user = newUser;
+            } else if (!user) { // If existingUser was found but not assigned to 'user' yet
+                user = existingUser;
             }
         }
 
@@ -381,8 +405,8 @@ export const clerkAuth = async (req, res) => {
 
     } catch (error) {
         console.error('❌ Clerk Auth Error:', error);
-        
-        res.status(500).json({ 
+
+        res.status(500).json({
             error: 'Internal server error',
             code: 'SERVER_ERROR'
         });
@@ -404,7 +428,7 @@ export const getCurrentUser = async (req, res) => {
         const userId = req.user?.id;
 
         if (!userId) {
-            return res.status(401).json({ 
+            return res.status(401).json({
                 error: 'Not authenticated',
                 code: 'NOT_AUTHENTICATED'
             });
@@ -418,7 +442,7 @@ export const getCurrentUser = async (req, res) => {
             .single();
 
         if (error || !user) {
-            return res.status(404).json({ 
+            return res.status(404).json({
                 error: 'User not found',
                 code: 'USER_NOT_FOUND'
             });
@@ -440,7 +464,7 @@ export const getCurrentUser = async (req, res) => {
 
     } catch (error) {
         console.error('Get Current User Error:', error);
-        res.status(500).json({ 
+        res.status(500).json({
             error: 'Failed to get user information',
             code: 'SERVER_ERROR'
         });

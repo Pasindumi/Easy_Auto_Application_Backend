@@ -26,13 +26,13 @@ export const verifyClerkToken = async (sessionToken) => {
     console.log('🔐 Verifying Clerk token...');
     console.log('Token length:', sessionToken?.length);
     console.log('Secret key length:', CLERK_SECRET_KEY?.length);
-    
+
     // Verify the session token using @clerk/backend with clock skew tolerance
     const payload = await verifyToken(sessionToken, {
       secretKey: CLERK_SECRET_KEY,
       clockSkewInMs: 300000 // 5 minutes clock skew tolerance
     });
-    
+
     if (!payload) {
       console.error('❌ verifyToken returned null/undefined');
       throw new Error('Invalid session token');
@@ -40,13 +40,13 @@ export const verifyClerkToken = async (sessionToken) => {
 
     console.log('✅ Token verified successfully');
     console.log('Payload keys:', Object.keys(payload));
-    
+
     return payload; // Returns token payload with sub, email, first_name, etc.
   } catch (error) {
     console.error('❌ Clerk token verification error:');
     console.error('Error name:', error.name);
     console.error('Error message:', error.message);
-    
+
     // Provide more specific error messages
     if (error.message?.includes('not before')) {
       console.error('⚠️  Clock skew detected - token nbf claim is in the future');
@@ -57,8 +57,53 @@ export const verifyClerkToken = async (sessionToken) => {
     } else if (error.message?.includes('expired')) {
       throw new Error('Token has expired');
     }
-    
+
     throw error; // Re-throw to handle in controller
+  }
+};
+
+/**
+ * Fetch full user details from Clerk Backend API
+ * @param {string} userId - Clerk User ID (sub)
+ * @returns {Object} - Complete user object from Clerk
+ */
+export const getUser = async (userId) => {
+  if (!CLERK_SECRET_KEY) {
+    throw new Error('Clerk is not configured');
+  }
+
+  try {
+    console.log(`📡 Fetching full Clerk profile for: ${userId}...`);
+
+    // Using the legacy Node SDK method or REST API fetch if needed
+    // But since we have @clerk/clerk-sdk-node, we can use the fetch API if easier
+    const response = await fetch(`https://api.clerk.com/v1/users/${userId}`, {
+      headers: {
+        'Authorization': `Bearer ${CLERK_SECRET_KEY}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      console.error('❌ Clerk API Error:', errorData);
+      throw new Error(`Failed to fetch user from Clerk: ${response.statusText}`);
+    }
+
+    const userData = await response.json();
+    console.log('✅ Clerk profile fetched successfully');
+
+    return {
+      id: userData.id,
+      email: userData.email_addresses?.[0]?.email_address || null,
+      first_name: userData.first_name,
+      last_name: userData.last_name,
+      image_url: userData.image_url,
+      phone_number: userData.phone_numbers?.[0]?.phone_number || null
+    };
+  } catch (error) {
+    console.error('❌ Error fetching user from Clerk:', error.message);
+    throw error;
   }
 };
 
@@ -74,9 +119,9 @@ export const verifyClerkWebhook = (req, webhookSecret) => {
   const signature = req.headers['svix-signature'];
   const timestamp = req.headers['svix-timestamp'];
   const payload = JSON.stringify(req.body);
-  
+
   // TODO: Implement actual signature verification
   // This is a placeholder - refer to Clerk docs for actual implementation
-  
+
   return true;
 };
