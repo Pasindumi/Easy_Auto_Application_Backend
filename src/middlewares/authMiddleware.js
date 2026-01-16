@@ -1,31 +1,152 @@
-import jwt from 'jsonwebtoken';
-import dotenv from 'dotenv';
+import * as jwtService from '../services/jwtService.js';
+import supabase from '../config/supabase.js';
 
-dotenv.config();
+/**
+ * Authentication Middleware
+ * Protects routes by verifying JWT access tokens
+ */
 
-const protect = (req, res, next) => {
-    let token;
+/**
+ * Main authentication middleware
+ * Verifies access token and attaches user to request
+ */
+export const protect = async (req, res, next) => {
+    try {
+        let token;
 
-    if (
-        req.headers.authorization &&
-        req.headers.authorization.startsWith('Bearer')
-    ) {
-        try {
+        // Extract token from Authorization header
+        if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
             token = req.headers.authorization.split(' ')[1];
-
-            const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your_super_secret_key_change_this');
-
-            req.user = decoded; // { id, email }
-            next();
-        } catch (error) {
-            console.error(error);
-            res.status(401).json({ success: false, message: 'Not authorized, token failed' });
         }
-    }
 
-    if (!token) {
-        res.status(401).json({ success: false, message: 'Not authorized, no token' });
+        if (!token) {
+            return res.status(401).json({ 
+                success: false, 
+                error: 'Not authorized. No token provided.' 
+            });
+        }
+
+        // Verify token
+        const decoded = jwtService.verifyAccessToken(token);
+
+        // Get user from database
+        const { data: user, error } = await supabase
+            .from('users')
+            .select('id, email, phone, name, role, avatar, is_premium, clerk_user_id')
+            .eq('id', decoded.id)
+            .single();
+
+        if (error || !user) {
+            return res.status(401).json({ 
+                success: false, 
+                error: 'Not authorized. User not found.' 
+            });
+        }
+
+        // Attach user to request
+        req.user = user;
+        next();
+
+    } catch (error) {
+        console.error('Auth Middleware Error:', error);
+        
+        if (error.message === 'Access token expired') {
+            return res.status(401).json({ 
+                success: false, 
+                error: 'Access token expired. Please refresh your token.',
+                code: 'TOKEN_EXPIRED'
+            });
+        }
+
+        return res.status(401).json({ 
+            success: false, 
+            error: 'Not authorized. Invalid token.' 
+        });
     }
 };
 
-export { protect };
+/**
+ * Optional authentication middleware
+ * Attaches user if token is valid, but allows request to continue even without token
+ */
+export const optionalAuth = async (req, res, next) => {
+    try {
+        let token;
+
+        if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+            token = req.headers.authorization.split(' ')[1];
+        }
+
+        if (token) {
+            try {
+                const decoded = jwtService.verifyAccessToken(token);
+                
+                const { data: user } = await supabase
+                    .from('users')
+                    .select('id, email, phone, name, role, avatar, is_premium')
+                    .eq('id', decoded.id)
+                    .single();
+
+                if (user) {
+                    req.user = user;
+                }
+            } catch (error) {
+                // Silently fail - user remains undefined
+                console.log('Optional auth failed:', error.message);
+            }
+        }
+
+        next();
+    } catch (error) {
+        next();
+    }
+};
+
+/**
+ * Role-based authorization middleware
+ * Requires specific role(s) to access route
+ * @param  {...string} roles - Allowed roles
+ */
+export const authorize = (...roles) => {
+    return (req, res, next) => {
+        if (!req.user) {
+            return res.status(401).json({ 
+                success: false, 
+                error: 'Not authorized. Please login.' 
+            });
+        }
+
+        if (!roles.includes(req.user.role)) {
+            return res.status(403).json({ 
+                success: false, 
+                error: `Access denied. Required role: ${roles.join(' or ')}` 
+            });
+        }
+
+        next();
+    };
+};
+
+/**
+ * Premium user middleware
+ * Requires premium subscription
+ */
+export const requirePremium = (req, res, next) => {
+    if (!req.user) {
+        return res.status(401).json({ 
+            success: false, 
+            error: 'Not authorized. Please login.' 
+        });
+    }
+
+    if (!req.user.is_premium) {
+        return res.status(403).json({ 
+            success: false, 
+            error: 'This feature requires a premium subscription.' 
+        });
+    }
+
+    next();
+};
+
+export default { protect, optionalAuth, authorize, requirePremium };
