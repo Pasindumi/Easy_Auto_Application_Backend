@@ -1,4 +1,5 @@
 import supabase from '../config/supabase.js';
+import { uploadFileToS3 } from '../utils/s3Service.js';
 
 // Create a new Car Ad
 export const createAd = async (req, res) => {
@@ -22,27 +23,27 @@ export const createAd = async (req, res) => {
 
         // New Dynamic Fields
         vehicle_type_id,
-        dynamicAttributes, // Array of { attribute_id: uuid, value: any }
+        dynamicAttributes, // Array of { attribute_id: uuid, value: any } or JSON string
 
-        // Images
+        // Images - Fallback for JSON if no files
         images,
     } = req.body;
+
+    const files = req.files || [];
 
     // --- Robust Sanitization for DB Constraints ---
     const toSafeUUID = (val) => (!val || val === "" || val === "undefined") ? null : val;
     const toSafeNumeric = (val) => (!val || val === "" || val === "undefined") ? null : (isNaN(val) ? 0 : parseFloat(val));
     const toSafeInt = (val) => (!val || val === "" || val === "undefined") ? null : (isNaN(val) ? 0 : parseInt(val));
+    const toSafeBool = (val) => val === true || val === 'true';
 
     const safePrice = toSafeNumeric(price);
     const safeVehicleTypeId = toSafeUUID(vehicle_type_id);
-    const safeYear = toSafeUUID(year); // Keep year as text unless DB strictly needs int, but if it is int, use toSafeInt
-    const safeMileage = toSafeUUID(mileage); // Same here
-    const safeEngineCapacity = toSafeUUID(engineCapacity);
+    const safeYear = (year === "undefined" || year === "null") ? null : year;
+    const safeMileage = (mileage === "undefined" || mileage === "null") ? null : mileage;
+    const safeEngineCapacity = (engineCapacity === "undefined" || engineCapacity === "null") ? null : engineCapacity;
 
     // Mapped fields
-    const fuel_type = fuelType;
-    const body_type = bodyType;
-
     try {
         // 1. Create CarAd record
         const { data: adData, error: adError } = await supabase
@@ -76,9 +77,9 @@ export const createAd = async (req, res) => {
                 year: safeYear,
                 mileage: safeMileage,
                 engine_capacity: safeEngineCapacity,
-                fuel_type,
+                fuel_type: fuelType,
                 transmission,
-                body_type,
+                body_type: bodyType,
             },
         ]);
 
@@ -88,42 +89,64 @@ export const createAd = async (req, res) => {
         }
 
         // 3. Insert Dynamic Attributes
-        if (dynamicAttributes && dynamicAttributes.length > 0) {
-            const attrRecords = dynamicAttributes.map(attr => ({
+        let parsedAttributes = dynamicAttributes;
+        if (typeof dynamicAttributes === 'string') {
+            try { parsedAttributes = JSON.parse(dynamicAttributes); } catch (e) { parsedAttributes = []; }
+        }
+
+        if (parsedAttributes && parsedAttributes.length > 0) {
+            const attrRecords = parsedAttributes.map(attr => ({
                 ad_id: adId,
                 attribute_id: attr.attribute_id,
-                value: String(attr.value) // Ensure value is stored as text
+                value: String(attr.value)
             }));
 
             const { error: attrError } = await supabase
                 .from('car_details_attribute_values')
                 .insert(attrRecords);
 
-            if (attrError) {
-                console.error("Error adding specific attributes:", attrError);
-                // Non-critical (?) or should rollback? 
-                // Ideally rollback, but for now log error.
+            if (attrError) console.error("Dynamic Attributes Error:", attrError);
+        }
+
+        // 4. Handle Images (S3 or JSON fallback)
+        let uploadedUrls = [];
+        if (files && files.length > 0) {
+            const uploadPromises = files.map(file =>
+                uploadFileToS3(file.buffer, file.originalname, file.mimetype)
+            );
+            uploadedUrls = await Promise.all(uploadPromises);
+        }
+
+        let existingUrls = [];
+        if (images) {
+            if (typeof images === 'string' && images.startsWith('[')) {
+                try { existingUrls = JSON.parse(images); } catch (e) { existingUrls = [images]; }
+            } else {
+                existingUrls = Array.isArray(images) ? images : [images];
             }
         }
 
-        // 4. Insert Images
-        if (images && images.length > 0) {
-            const imageRecords = images.map((url, index) => ({
+        const finalImageUrls = [...existingUrls, ...uploadedUrls];
+
+        if (finalImageUrls.length > 0) {
+            const imageRecords = finalImageUrls.map((url, index) => ({
                 ad_id: adId,
                 image_url: url,
-                is_primary: index === 0,
+                is_primary: index === 0
             }));
 
-            const { error: imageError } = await supabase
+            const { error: imgError } = await supabase
                 .from("AdImage")
                 .insert(imageRecords);
 
-            if (imageError) {
-                console.error("Error adding images:", imageError);
-            }
+            if (imgError) console.error("Image Insert Error:", imgError);
         }
 
-        res.status(201).json({ success: true, data: adData });
+        res.status(201).json({
+            success: true,
+            message: "Car ad created successfully!",
+            data: adData,
+        });
     } catch (error) {
         console.error("Error creating ad:", error);
         res.status(500).json({ success: false, message: error.message });
@@ -132,19 +155,154 @@ export const createAd = async (req, res) => {
 
 // Update Ad
 export const updateAd = async (req, res) => {
-    const { id } = req.params;
-    const updates = req.body;
+    const { id: adId } = req.params;
+    const {
+        title,
+        price,
+        location,
+        description,
+        status,
+        negotiable,
+
+        // Static Car Details
+        condition,
+        brand,
+        model,
+        year,
+        mileage,
+        engineCapacity,
+        fuelType,
+        transmission,
+        bodyType,
+
+        // New Dynamic Fields
+        vehicle_type_id,
+        dynamicAttributes,
+
+        // Images
+        images,
+    } = req.body;
+
+    const files = req.files || [];
+
+    // --- Sanitization ---
+    const toSafeUUID = (val) => (!val || val === "" || val === "undefined") ? null : val;
+    const toSafeNumeric = (val) => (!val || val === "" || val === "undefined") ? null : (isNaN(val) ? 0 : parseFloat(val));
+    const toSafeBool = (val) => val === true || val === 'true';
 
     try {
-        const { data, error } = await supabase
-            .from("CarAd")
-            .update(updates)
-            .eq("id", id)
-            .select()
-            .single();
+        // 1. Prepare CarAd updates
+        const adUpdates = {};
+        if (title !== undefined) adUpdates.title = title;
+        if (price !== undefined) adUpdates.price = toSafeNumeric(price);
+        if (location !== undefined) adUpdates.location = location;
+        if (description !== undefined) adUpdates.description = description;
+        if (status !== undefined) adUpdates.status = status;
+        if (vehicle_type_id !== undefined) adUpdates.vehicle_type_id = toSafeUUID(vehicle_type_id);
 
-        if (error) throw error;
-        res.json({ success: true, data });
+        let adData = null;
+        if (Object.keys(adUpdates).length > 0) {
+            const { data, error: adError } = await supabase
+                .from("CarAd")
+                .update(adUpdates)
+                .eq("id", adId)
+                .select()
+                .single();
+            if (adError) throw adError;
+            adData = data;
+        }
+
+        // 2. Prepare/Update CarDetails record
+        const detailsUpdates = {};
+        if (condition !== undefined) detailsUpdates.condition = condition;
+        if (brand !== undefined) detailsUpdates.brand = brand;
+        if (model !== undefined) detailsUpdates.model = model;
+        if (year !== undefined) detailsUpdates.year = (year === "undefined" || year === "null") ? null : year;
+        if (mileage !== undefined) detailsUpdates.mileage = (mileage === "undefined" || mileage === "null") ? null : mileage;
+        if (engineCapacity !== undefined) detailsUpdates.engine_capacity = (engineCapacity === "undefined" || engineCapacity === "null") ? null : engineCapacity;
+        if (fuelType !== undefined) detailsUpdates.fuel_type = fuelType;
+        if (transmission !== undefined) detailsUpdates.transmission = transmission;
+        if (bodyType !== undefined) detailsUpdates.body_type = bodyType;
+
+        if (Object.keys(detailsUpdates).length > 0) {
+            const { error: detailsError } = await supabase
+                .from("CarDetails")
+                .upsert({
+                    ad_id: adId,
+                    ...detailsUpdates
+                }, { onConflict: 'ad_id' });
+
+            if (detailsError) throw detailsError;
+        }
+
+        // 3. Update Dynamic Attributes
+        if (dynamicAttributes !== undefined) {
+            await supabase.from('car_details_attribute_values').delete().eq('ad_id', adId);
+
+            let parsedAttributes = dynamicAttributes;
+            if (typeof dynamicAttributes === 'string') {
+                try { parsedAttributes = JSON.parse(dynamicAttributes); } catch (e) { parsedAttributes = []; }
+            }
+
+            if (parsedAttributes && parsedAttributes.length > 0) {
+                const attrRecords = parsedAttributes.map(attr => ({
+                    ad_id: adId,
+                    attribute_id: attr.attribute_id,
+                    value: String(attr.value)
+                }));
+
+                const { error: attrError } = await supabase
+                    .from('car_details_attribute_values')
+                    .insert(attrRecords);
+
+                if (attrError) console.error("Error updating attributes:", attrError);
+            }
+        }
+
+        // 4. Update Images
+        if ((files && files.length > 0) || images !== undefined) {
+            await supabase.from("AdImage").delete().eq("ad_id", adId);
+
+            let uploadedUrls = [];
+            if (files && files.length > 0) {
+                const uploadPromises = files.map(file =>
+                    uploadFileToS3(file.buffer, file.originalname, file.mimetype)
+                );
+                uploadedUrls = await Promise.all(uploadPromises);
+            }
+
+            let existingUrls = [];
+            if (images) {
+                if (typeof images === 'string' && images.startsWith('[')) {
+                    try { existingUrls = JSON.parse(images); } catch (e) { existingUrls = [images]; }
+                } else {
+                    existingUrls = Array.isArray(images) ? images : [images];
+                }
+            }
+
+            const finalImageUrls = [...existingUrls, ...uploadedUrls];
+
+            if (finalImageUrls.length > 0) {
+                const imageRecords = finalImageUrls.map((url, index) => ({
+                    ad_id: adId,
+                    image_url: url,
+                    is_primary: index === 0,
+                }));
+
+                const { error: imgError } = await supabase
+                    .from("AdImage")
+                    .insert(imageRecords);
+
+                if (imgError) console.error("Error updating images:", imgError);
+            }
+        }
+
+        if (!adData) {
+            const { data: currentAd } = await supabase.from('CarAd').select('*').eq('id', adId).single();
+            adData = currentAd;
+        }
+
+        res.json({ success: true, data: adData });
     } catch (error) {
         console.error("Error updating ad:", error);
         res.status(500).json({ success: false, message: error.message });
@@ -267,7 +425,12 @@ export const adminGetAds = async (req, res) => {
             .select(`
                 *,
                 vehicle_type:vehicle_types(type_name),
-                seller:users(name, email)
+                CarDetails(*),
+                AdImage(*),
+                attributes:car_details_attribute_values(
+                    value,
+                    attribute:vehicle_attributes(attribute_name, unit, data_type)
+                )
             `, { count: 'exact' })
             .range(start, end)
             .order('created_at', { ascending: false });
@@ -284,6 +447,26 @@ export const adminGetAds = async (req, res) => {
 
         if (error) throw error;
 
+        // Fetch seller details separately to avoid join issues
+        const sellerIds = [...new Set(data.map(ad => ad.seller_id).filter(Boolean))];
+        if (sellerIds.length > 0) {
+            const { data: usersData, error: usersError } = await supabase
+                .from('users')
+                .select('id, name, email')
+                .in('id', sellerIds);
+
+            if (!usersError && usersData) {
+                const userMap = usersData.reduce((acc, user) => {
+                    acc[user.id] = user;
+                    return acc;
+                }, {});
+
+                data.forEach(ad => {
+                    ad.seller = userMap[ad.seller_id] || null;
+                });
+            }
+        }
+
         res.json({
             success: true,
             data,
@@ -295,6 +478,7 @@ export const adminGetAds = async (req, res) => {
         });
 
     } catch (error) {
+        console.error("Error in adminGetAds:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

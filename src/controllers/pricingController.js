@@ -237,3 +237,63 @@ export const removePackageIncludedItem = async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 };
+
+// --- Public Data ---
+
+export const getPublicPackages = async (req, res) => {
+    try {
+        // 1. Get all active packages
+        const { data: packages, error: pkgError } = await supabase
+            .from('price_items')
+            .select('*')
+            .eq('item_type', 'PACKAGE')
+            .eq('status', 'ACTIVE');
+
+        if (pkgError) throw pkgError;
+
+        if (!packages || packages.length === 0) {
+            return res.json([]);
+        }
+
+        const packageIds = packages.map(p => p.id);
+
+        // 2. Get pricing rules for these packages
+        const { data: rules, error: rulesError } = await supabase
+            .from('pricing_rules')
+            .select('*')
+            .in('price_item_id', packageIds);
+
+        if (rulesError) throw rulesError;
+
+        // 3. Get features (config) for these packages
+        const { data: features, error: featError } = await supabase
+            .from('package_features')
+            .select('*')
+            .in('price_item_id', packageIds);
+
+        if (featError) throw featError;
+
+        // 4. Combine data
+        const enrichedPackages = packages.map(pkg => {
+            const pkgRules = rules.filter(r => r.price_item_id === pkg.id);
+            const pkgFeatures = features.filter(f => f.price_item_id === pkg.id);
+
+            // Extract common config from features
+            const config = {};
+            pkgFeatures.forEach(f => {
+                config[f.feature_key] = f.feature_value;
+            });
+
+            return {
+                ...pkg,
+                rules: pkgRules,
+                features: pkgFeatures,
+                config: config
+            };
+        });
+
+        res.json(enrichedPackages);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+};

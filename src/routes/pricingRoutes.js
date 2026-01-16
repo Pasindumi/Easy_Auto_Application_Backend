@@ -12,7 +12,8 @@ import {
     deletePackageFeature,
     getPackageIncludedItems,
     addPackageIncludedItem,
-    removePackageIncludedItem
+    removePackageIncludedItem,
+    getPublicPackages
 } from '../controllers/pricingController.js';
 
 const router = express.Router();
@@ -37,5 +38,8 @@ router.delete('/features/:id', deletePackageFeature);
 router.get('/package-items/:packageId', getPackageIncludedItems);
 router.post('/package-items', addPackageIncludedItem);
 router.delete('/package-items/:id', removePackageIncludedItem);
+
+// Public Routes
+router.get('/public-packages', getPublicPackages);
 
 export default router;

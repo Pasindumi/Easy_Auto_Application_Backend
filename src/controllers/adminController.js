@@ -114,12 +114,17 @@ export const getDashboardStats = async (req, res) => {
         // Group by vehicle type would require a more complex query or RPC in supabase, for now we will just return raw counts
 
         res.json({
-            totalAds: totalAds || 0,
-            activeAds: activeAds || 0,
-            expiredAds: expiredAds || 0,
-            featuredAds: featuredAds || 0,
-            totalVehicleTypes: totalVehicleTypes || 0,
-            totalBrands: totalBrands || 0,
+            success: true,
+            data: {
+                ads: {
+                    total: totalAds || 0,
+                    active: activeAds || 0,
+                    expired: expiredAds || 0,
+                    featured: featuredAds || 0,
+                },
+                vehicleTypes: totalVehicleTypes || 0,
+                brands: totalBrands || 0,
+            }
         });
 
     } catch (error) {
