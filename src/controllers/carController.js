@@ -39,9 +39,9 @@ export const createAd = async (req, res) => {
 
     const safePrice = toSafeNumeric(price);
     const safeVehicleTypeId = toSafeUUID(vehicle_type_id);
-    const safeYear = (year === "undefined" || year === "null") ? null : year;
-    const safeMileage = (mileage === "undefined" || mileage === "null") ? null : mileage;
-    const safeEngineCapacity = (engineCapacity === "undefined" || engineCapacity === "null") ? null : engineCapacity;
+    const safeYear = toSafeInt(year);
+    const safeMileage = toSafeInt(mileage);
+    const safeEngineCapacity = toSafeNumeric(engineCapacity);
 
     // Mapped fields
     try {
@@ -217,9 +217,9 @@ export const updateAd = async (req, res) => {
         if (condition !== undefined) detailsUpdates.condition = condition;
         if (brand !== undefined) detailsUpdates.brand = brand;
         if (model !== undefined) detailsUpdates.model = model;
-        if (year !== undefined) detailsUpdates.year = (year === "undefined" || year === "null") ? null : year;
-        if (mileage !== undefined) detailsUpdates.mileage = (mileage === "undefined" || mileage === "null") ? null : mileage;
-        if (engineCapacity !== undefined) detailsUpdates.engine_capacity = (engineCapacity === "undefined" || engineCapacity === "null") ? null : engineCapacity;
+        if (year !== undefined) detailsUpdates.year = toSafeInt(year);
+        if (mileage !== undefined) detailsUpdates.mileage = toSafeInt(mileage);
+        if (engineCapacity !== undefined) detailsUpdates.engine_capacity = toSafeNumeric(engineCapacity);
         if (fuelType !== undefined) detailsUpdates.fuel_type = fuelType;
         if (transmission !== undefined) detailsUpdates.transmission = transmission;
         if (bodyType !== undefined) detailsUpdates.body_type = bodyType;
