@@ -9,6 +9,7 @@ import authRoutes from './routes/authRoutes.js';
 import adminRoutes from './routes/adminRoutes.js';
 import vehicleConfigRoutes from './routes/vehicleConfigRoutes.js';
 import pricingRoutes from './routes/pricingRoutes.js';
+import discountsRoutes from './routes/discountsRoutes.js';
 import startCronJobs from './utils/cronJobs.js';
 
 const app = express();
@@ -26,6 +27,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/vehicle-config', vehicleConfigRoutes);
 app.use('/api/pricing', pricingRoutes);
+app.use('/api/discounts', discountsRoutes);
 
 const PORT = process.env.PORT || 5000;
 

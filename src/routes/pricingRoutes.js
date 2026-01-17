@@ -6,6 +6,7 @@ import {
     deletePriceItem,
     getPricingRules,
     createPricingRule,
+    updatePricingRule,
     deletePricingRule,
     getPackageFeatures,
     addPackageFeature,
@@ -27,6 +28,7 @@ router.delete('/items/:id', deletePriceItem);
 // Pricing Rules
 router.get('/rules', getPricingRules);
 router.post('/rules', createPricingRule);
+router.put('/rules/:id', updatePricingRule);
 router.delete('/rules/:id', deletePricingRule);
 
 // Package Features

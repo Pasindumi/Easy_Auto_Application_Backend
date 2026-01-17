@@ -80,7 +80,7 @@ export const getPricingRules = async (req, res) => {
             .from('pricing_rules')
             .select(`
         *,
-        price_items (name, code),
+        price_items (name, code, item_type),
         vehicle_types (type_name)
       `)
             .order('created_at', { ascending: false });
@@ -94,7 +94,7 @@ export const getPricingRules = async (req, res) => {
 
 export const createPricingRule = async (req, res) => {
     try {
-        const { price_item_id, vehicle_type_id, price, unit, min_qty, max_qty, created_by_admin } = req.body;
+        const { price_item_id, vehicle_type_id, price, unit, free_image_count, min_qty, max_qty, created_by_admin } = req.body;
 
         if (!price_item_id || !price || !unit) {
             return res.status(400).json({ error: 'Price Item, Price, and Unit are required' });
@@ -102,12 +102,31 @@ export const createPricingRule = async (req, res) => {
 
         const { data, error } = await supabase
             .from('pricing_rules')
-            .insert([{ price_item_id, vehicle_type_id, price, unit, min_qty, max_qty, created_by_admin }])
+            .insert([{ price_item_id, vehicle_type_id, price, unit, free_image_count, min_qty, max_qty, created_by_admin }])
             .select()
             .single();
 
         if (error) throw error;
         res.status(201).json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+};
+
+export const updatePricingRule = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const updates = req.body;
+
+        const { data, error } = await supabase
+            .from('pricing_rules')
+            .update(updates)
+            .eq('id', id)
+            .select()
+            .single();
+
+        if (error) throw error;
+        res.json(data);
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
