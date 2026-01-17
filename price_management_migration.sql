@@ -26,6 +26,7 @@ create table if not exists public.pricing_rules (
   vehicle_type_id uuid references public.vehicle_types(id) on delete set null, -- Nullable generic price
   price numeric not null,
   unit text not null check (unit in ('PER_AD', 'PER_IMAGE', 'PER_DAY', 'PER_PACKAGE', 'ONE_TIME')),
+  free_image_count integer default 0,
   min_qty integer default 1,
   max_qty integer,
   valid_from timestamp with time zone,
@@ -40,6 +41,12 @@ drop policy if exists "Allow public read rules" on public.pricing_rules;
 create policy "Allow public read rules" on public.pricing_rules for select using (true);
 drop policy if exists "Allow admin all rules" on public.pricing_rules;
 create policy "Allow admin all rules" on public.pricing_rules for all using (true);
+
+-- SAFEGUARD: Ensure free_image_count exists even if table was already created
+alter table public.pricing_rules add column if not exists free_image_count integer default 0;
+
+-- Refresh Schema Cache
+NOTIFY pgrst, 'reload schema';
 
 
 -- 3. Package Features (Attributes for Packages)

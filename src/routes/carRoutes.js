@@ -1,6 +1,6 @@
 import express from 'express';
 import multer from 'multer';
-import { createAd, getAds, getAdById, updateAd, adminGetAds, adminUpdateAdStatus } from '../controllers/carController.js';
+import { createAd, getAds, getAdById, updateAd, adminGetAds, adminUpdateAdStatus, getMyAds } from '../controllers/carController.js';
 import { protectAdmin } from '../middlewares/adminAuthMiddleware.js';
 import { protect } from '../middlewares/authMiddleware.js';
 
@@ -13,25 +13,20 @@ const upload = multer({
     limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
 });
 
-// Public Routes
-router.get("/", getAds);
-router.get("/:id", getAdById);
+// ============================================
+// PUBLIC & USER ROUTES
+// ============================================
 
-// Public/User Routes (Create Ad - needs auth)
-router.post("/", protect, upload.array('images', 10), createAd);
-router.put("/:id", protect, upload.array('images', 10), updateAd);
-// ============================================
-// PUBLIC ROUTES (No authentication required)
-// ============================================
+// 1. Specific Routes (Must come before /:id)
+router.get("/my-ads", protect, getMyAds); // GET /api/cars/my-ads
+
+// 2. Collection Routes
 router.get("/", getAds); // GET /api/cars - List all ads
-router.get("/:id", getAdById); // GET /api/cars/:id - Get single ad
+router.post("/", protect, upload.array('images', 10), createAd); // POST /api/cars - Create new ad
 
-// ============================================
-// PROTECTED ROUTES (Authentication required)
-// ============================================
-router.post("/", protect, createAd); // POST /api/cars - Create new ad
-router.put("/:id", protect, updateAd); // PUT /api/cars/:id - Update ad
-// DELETE route would go here if implemented: router.delete("/:id", protect, deleteAd);
+// 3. Generic ID Routes
+router.get("/:id", getAdById); // GET /api/cars/:id - Get single ad
+router.put("/:id", protect, upload.array('images', 10), updateAd); // PUT /api/cars/:id - Update ad
 
 // ============================================
 // ADMIN ROUTES (Admin authentication required)
