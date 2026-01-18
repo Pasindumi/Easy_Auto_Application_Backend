@@ -94,7 +94,7 @@ export const getPricingRules = async (req, res) => {
 
 export const createPricingRule = async (req, res) => {
     try {
-        const { price_item_id, vehicle_type_id, price, unit, free_image_count, min_qty, max_qty, created_by_admin } = req.body;
+        const { price_item_id, vehicle_type_id, price, unit, free_image_count, description_limit, extra_letter_price, min_qty, max_qty, created_by_admin } = req.body;
 
         if (!price_item_id || !price || !unit) {
             return res.status(400).json({ error: 'Price Item, Price, and Unit are required' });
@@ -102,7 +102,7 @@ export const createPricingRule = async (req, res) => {
 
         const { data, error } = await supabase
             .from('pricing_rules')
-            .insert([{ price_item_id, vehicle_type_id, price, unit, free_image_count, min_qty, max_qty, created_by_admin }])
+            .insert([{ price_item_id, vehicle_type_id, price, unit, free_image_count, description_limit: description_limit || 500, extra_letter_price: extra_letter_price || 0, min_qty, max_qty, created_by_admin }])
             .select()
             .single();
 
@@ -209,7 +209,8 @@ export const getPackageIncludedItems = async (req, res) => {
             .from('package_included_items')
             .select(`
         *,
-        price_items!package_included_items_included_item_id_fkey (name, code, item_type)
+        price_items!package_included_items_included_item_id_fkey (name, code, item_type),
+        vehicle_types (type_name)
       `)
             .eq('package_id', packageId);
 
@@ -222,7 +223,7 @@ export const getPackageIncludedItems = async (req, res) => {
 
 export const addPackageIncludedItem = async (req, res) => {
     try {
-        const { package_id, included_item_id, quantity, is_unlimited } = req.body;
+        const { package_id, included_item_id, quantity, is_unlimited, vehicle_type_id } = req.body;
 
         // Prevent recursive inclusion (basic check)
         if (package_id === included_item_id) {
@@ -231,7 +232,7 @@ export const addPackageIncludedItem = async (req, res) => {
 
         const { data, error } = await supabase
             .from('package_included_items')
-            .insert([{ package_id, included_item_id, quantity, is_unlimited }])
+            .insert([{ package_id, included_item_id, quantity, is_unlimited, vehicle_type_id: vehicle_type_id || null }])
             .select()
             .single();
 
@@ -252,6 +253,58 @@ export const removePackageIncludedItem = async (req, res) => {
 
         if (error) throw error;
         res.json({ message: 'Included item removed successfully' });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+};
+
+// --- Package Ad Limits ---
+
+export const getPackageAdLimits = async (req, res) => {
+    try {
+        const { packageId } = req.params;
+        const { data, error } = await supabase
+            .from('package_ad_limits')
+            .select(`
+        *,
+        vehicle_types (type_name)
+      `)
+            .eq('package_id', packageId);
+
+        if (error) throw error;
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+};
+
+export const addPackageAdLimit = async (req, res) => {
+    try {
+        const { package_id, vehicle_type_id, quantity, is_unlimited } = req.body;
+
+        const { data, error } = await supabase
+            .from('package_ad_limits')
+            .upsert([{ package_id, vehicle_type_id, quantity, is_unlimited }], { onConflict: 'package_id, vehicle_type_id' })
+            .select()
+            .single();
+
+        if (error) throw error;
+        res.status(201).json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+};
+
+export const deletePackageAdLimit = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { error } = await supabase
+            .from('package_ad_limits')
+            .delete()
+            .eq('id', id);
+
+        if (error) throw error;
+        res.json({ message: 'Ad limit removed successfully' });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -292,10 +345,28 @@ export const getPublicPackages = async (req, res) => {
 
         if (featError) throw featError;
 
-        // 4. Combine data
+        // 4. Get included items
+        const { data: includedItems, error: incError } = await supabase
+            .from('package_included_items')
+            .select(`*, price_items!package_included_items_included_item_id_fkey (name, code, item_type)`)
+            .in('package_id', packageIds);
+
+        if (incError) throw incError;
+
+        // 5. Get ad limits
+        const { data: adLimits, error: adError } = await supabase
+            .from('package_ad_limits')
+            .select(`*, vehicle_types (type_name)`)
+            .in('package_id', packageIds);
+
+        if (adError) throw adError;
+
+        // 6. Combine data
         const enrichedPackages = packages.map(pkg => {
             const pkgRules = rules.filter(r => r.price_item_id === pkg.id);
             const pkgFeatures = features.filter(f => f.price_item_id === pkg.id);
+            const pkgIncluded = includedItems.filter(i => i.package_id === pkg.id);
+            const pkgLimits = adLimits.filter(l => l.package_id === pkg.id);
 
             // Extract common config from features
             const config = {};
@@ -307,6 +378,8 @@ export const getPublicPackages = async (req, res) => {
                 ...pkg,
                 rules: pkgRules,
                 features: pkgFeatures,
+                included_items: pkgIncluded,
+                ad_limits: pkgLimits,
                 config: config
             };
         });

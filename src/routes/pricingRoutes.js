@@ -14,7 +14,10 @@ import {
     getPackageIncludedItems,
     addPackageIncludedItem,
     removePackageIncludedItem,
-    getPublicPackages
+    getPublicPackages,
+    getPackageAdLimits,
+    addPackageAdLimit,
+    deletePackageAdLimit
 } from '../controllers/pricingController.js';
 
 const router = express.Router();
@@ -40,6 +43,11 @@ router.delete('/features/:id', deletePackageFeature);
 router.get('/package-items/:packageId', getPackageIncludedItems);
 router.post('/package-items', addPackageIncludedItem);
 router.delete('/package-items/:id', removePackageIncludedItem);
+
+// Package Ad Limits
+router.get('/package-limits/:packageId', getPackageAdLimits);
+router.post('/package-limits', addPackageAdLimit);
+router.delete('/package-limits/:id', deletePackageAdLimit);
 
 // Public Routes
 router.get('/public-packages', getPublicPackages);
