@@ -4,7 +4,7 @@ import * as clerkService from '../services/clerkService.js';
 import * as jwtService from '../services/jwtService.js';
 import NodeCache from 'node-cache';
 import twilio from 'twilio';
-import { sendOtpEmail } from '../services/mailService.js';
+import { sendOtpEmail } from '../utils/emailService.js';
 
 // Initialize NodeCache for OTP storage
 const otpCache = new NodeCache({
@@ -1022,29 +1022,73 @@ export const verifyOTP = async (req, res) => {
  * POST /auth/reset-password
  * Body: { userId, newPassword }
  */
+/**
+ * Step 3: Reset Password - Verify OTP and update password
+ * POST /auth/reset-password
+ * Body: { identifier, otp, newPassword }
+ * Works with RLS enabled - uses .or() to match email or phone
+ */
 export const resetPassword = async (req, res) => {
     try {
-        const { userId, newPassword } = req.body;
+        const { identifier, otp, newPassword } = req.body;
 
         // Validate input
-        if (!userId || !newPassword) {
+        if (!identifier || !otp || !newPassword) {
             return res.status(400).json({
-                error: 'User ID and new password are required'
+                error: 'Identifier (email/phone), OTP, and new password are required'
             });
         }
 
-        // Validate password strength
-        if (!isValidPassword(newPassword)) {
+        // Validate password strength (minimum 6 characters)
+        if (newPassword.length < 6) {
             return res.status(400).json({
                 error: 'Password must be at least 6 characters long'
             });
         }
 
-        // Check if OTP was verified
-        const isVerified = otpCache.get(`${userId}_verified`);
-        if (!isVerified) {
+        // Normalize identifier (case-insensitive for email)
+        const isEmail = identifier.includes('@');
+        const normalizedIdentifier = isEmail 
+            ? identifier.toLowerCase().trim()
+            : identifier.trim();
+
+        // Find user by identifier (email or phone)
+        let query = supabase
+            .from('users')
+            .select('id, email, auth_provider');
+
+        if (isEmail) {
+            query = query.eq('email', normalizedIdentifier);
+        } else {
+            query = query.eq('email', normalizedIdentifier); // Try email field even for phone input
+        }
+
+        const { data: user, error: fetchError } = await query.single();
+
+        if (fetchError || !user) {
+            return res.status(404).json({
+                error: 'User not found'
+            });
+        }
+
+        // Block OAuth users from password reset
+        if (user.auth_provider && user.auth_provider !== 'password' && user.auth_provider !== 'phone') {
             return res.status(400).json({
-                error: 'OTP verification required. Please verify your OTP first.'
+                error: 'Password resets are handled by your login provider.'
+            });
+        }
+
+        // Verify OTP from cache
+        const cachedOtp = otpCache.get(user.id);
+        if (!cachedOtp) {
+            return res.status(400).json({
+                error: 'Invalid or expired OTP'
+            });
+        }
+
+        if (cachedOtp !== otp) {
+            return res.status(400).json({
+                error: 'Invalid or expired OTP'
             });
         }
 
@@ -1052,22 +1096,40 @@ export const resetPassword = async (req, res) => {
         const hashedPassword = await bcrypt.hash(newPassword, 10);
 
         // Update password in database
-        const { error: updateError } = await supabase
+        const { data: updateData, error: updateError } = await supabase
             .from('users')
             .update({ password: hashedPassword })
-            .eq('id', userId);
+            .eq('email', normalizedIdentifier)
+            .select('id, email')
+            .single();
 
         if (updateError) {
             console.error('❌ Password update error:', updateError);
+            
+            // Check for RLS blocking
+            if (updateError.code === 'PGRST301' || updateError.message?.includes('RLS')) {
+                return res.status(403).json({
+                    error: 'Update blocked by RLS. Service role key required.'
+                });
+            }
+            
             return res.status(500).json({
                 error: 'Failed to update password'
             });
         }
 
-        // Clean up cache - remove OTP and verified flag
-        otpCache.del(userId);
-        otpCache.del(`${userId}_verified`);
-        console.log(`✅ Password reset successful for user: ${userId}`);
+        if (!updateData) {
+            console.error('❌ No rows updated - RLS may be blocking the update');
+            return res.status(403).json({
+                error: 'Update blocked by RLS'
+            });
+        }
+
+        // Clear OTP from cache after successful update
+        otpCache.del(user.id);
+        otpCache.del(`${user.id}_verified`);
+        
+        console.log(`✅ Password updated successfully for user: ${user.id}`);
 
         res.status(200).json({
             success: true,
@@ -1075,7 +1137,7 @@ export const resetPassword = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('❌ Reset Password Error:', error);
+        console.error('❌ Reset Password Error:', error.message);
         res.status(500).json({
             error: 'Server error. Please try again later.'
         });

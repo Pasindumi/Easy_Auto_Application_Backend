@@ -21,6 +21,9 @@
     "jsonwebtoken": "^9.0.3",
     "morgan": "^1.10.0",
     "multer": "^2.0.2",
-    "node-cron": "^3.0.3"
+    "node-cache": "^5.1.2",
+    "node-cron": "^3.0.3",
+    "nodemailer": "^6.9.4",
+    "twilio": "^5.11.2"
   }
 }
