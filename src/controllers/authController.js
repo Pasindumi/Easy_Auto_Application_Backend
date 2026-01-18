@@ -2,6 +2,27 @@ import supabase from '../config/supabase.js';
 import bcrypt from 'bcryptjs';
 import * as clerkService from '../services/clerkService.js';
 import * as jwtService from '../services/jwtService.js';
+import NodeCache from 'node-cache';
+import twilio from 'twilio';
+import { sendOtpEmail } from '../services/mailService.js';
+
+// Initialize NodeCache for OTP storage
+const otpCache = new NodeCache({
+    stdTTL: parseInt(process.env.OTP_EXPIRATION_MINUTES || 5) * 60, // Convert minutes to seconds
+    checkperiod: 60 // Check for expired keys every 60 seconds
+});
+
+// Initialize Twilio client (lazy initialization to prevent startup crashes)
+let twilioClient = null;
+const getTwilioClient = () => {
+    if (!twilioClient && process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) {
+        twilioClient = twilio(
+            process.env.TWILIO_ACCOUNT_SID,
+            process.env.TWILIO_AUTH_TOKEN
+        );
+    }
+    return twilioClient;
+};
 
 /**
  * Authentication Controller
@@ -752,3 +773,312 @@ export const login = async (req, res) => {
         });
     }
 };
+
+// ============================================
+// PASSWORD RESET WITH OTP (TWILIO)
+// ============================================
+
+/**
+ * Generate 6-digit numeric OTP
+ */
+const generateOTP = () => {
+    return Math.floor(100000 + Math.random() * 900000).toString();
+};
+
+/**
+ * Convert local phone number to E.164 format
+ * Handles Sri Lankan numbers (assumes +94 country code)
+ */
+const formatPhoneToE164 = (phone) => {
+    if (!phone) return null;
+    
+    // Remove all non-digit characters
+    let cleaned = phone.replace(/\D/g, '');
+    
+    // If already has country code (94), add + prefix
+    if (cleaned.startsWith('94') && cleaned.length === 11) {
+        return '+' + cleaned;
+    }
+    
+    // If starts with 0, remove it and add +94
+    if (cleaned.startsWith('0') && cleaned.length === 10) {
+        return '+94' + cleaned.substring(1);
+    }
+    
+    // If 9 digits (without leading 0), add +94
+    if (cleaned.length === 9) {
+        return '+94' + cleaned;
+    }
+    
+    // Return as-is if already in correct format
+    if (phone.startsWith('+')) {
+        return phone;
+    }
+    
+    // Default: assume it needs +94
+    return '+94' + cleaned;
+};
+
+/**
+ * Send OTP via SMS using Twilio
+ * ⚠️ TEMPORARILY DISABLED - Twilio number not purchased yet
+ */
+const sendOTPviaSMS = async (phone, otp) => {
+    // 🔒 SMS DISABLED - Return false so email fallback is used
+    console.log('⚠️ SMS OTP disabled (Twilio number not purchased)');
+    console.log(`   Would send to: ${phone}, OTP: ${otp}`);
+    return false;
+    
+    /* 🔒 Uncomment when Twilio number is ready
+    try {
+        const client = getTwilioClient();
+        if (!client) {
+            console.error('❌ Twilio client not configured');
+            return false;
+        }
+        await client.messages.create({
+            body: `Your EasyAuto password reset OTP is: ${otp}. Valid for 5 minutes.`,
+            from: process.env.TWILIO_PHONE_NUMBER,
+            to: phone
+        });
+        console.log('✅ OTP SMS sent to:', phone);
+        return true;
+    } catch (error) {
+        console.error('❌ Failed to send OTP SMS:', error);
+        return false;
+    }
+    */
+};
+
+/**
+ * Step 1: Request password reset - Generate and send OTP
+ * POST /auth/forgot
+ * Body: { emailOrPhone }
+ */
+export const forgotPassword = async (req, res) => {
+    try {
+        const { emailOrPhone } = req.body;
+
+        // Validate input
+        if (!emailOrPhone) {
+            return res.status(400).json({
+                error: 'Email or phone number is required'
+            });
+        }
+
+        // Determine if input is email or phone
+        const isEmail = emailOrPhone.includes('@');
+        
+        // For phone: normalize to match DB format (without country code)
+        let searchValue;
+        let searchField;
+        
+        if (isEmail) {
+            searchField = 'email';
+            searchValue = emailOrPhone.toLowerCase().trim();
+        } else {
+            searchField = 'phone';
+            // Remove country code and non-digits to match DB format
+            let cleanedPhone = emailOrPhone.replace(/\D/g, '');
+            // If starts with country code 94, remove it
+            if (cleanedPhone.startsWith('94') && cleanedPhone.length === 11) {
+                cleanedPhone = '0' + cleanedPhone.substring(2);
+            }
+            // If doesn't start with 0, add it
+            if (!cleanedPhone.startsWith('0') && cleanedPhone.length === 9) {
+                cleanedPhone = '0' + cleanedPhone;
+            }
+            searchValue = cleanedPhone;
+        }
+
+        // Find user by email or phone
+        const { data: user, error: fetchError } = await supabase
+            .from('users')
+            .select('*')
+            .eq(searchField, searchValue)
+            .single();
+
+        // Return consistent error if user not found
+        if (fetchError || !user) {
+            return res.status(404).json({
+                error: 'User not found'
+            });
+        }
+
+        // Check if user is a social login user (no password)
+        if (user.clerk_user_id && !user.password) {
+            return res.status(400).json({
+                error: 'Password resets are handled by your login provider.'
+            });
+        }
+
+        // Generate 6-digit OTP
+        const otp = generateOTP();
+
+        // Store OTP in cache with user ID as key
+        otpCache.set(user.id, otp);
+        console.log(`✅ OTP generated and cached for user: ${user.id}`);
+
+        // ⚠️ TEMPORARY: SMS disabled until Twilio number is purchased
+        // Send OTP via EMAIL ONLY for now
+        let sendSuccess = false;
+        
+        if (!user.email) {
+            // If user has no email, we can't send OTP (SMS disabled)
+            otpCache.del(user.id);
+            return res.status(400).json({
+                error: 'SMS OTP is temporarily unavailable. Please use email for password reset.'
+            });
+        }
+        
+        // Send OTP via email using Resend
+        const emailResult = await sendOtpEmail(user.email, otp);
+        
+        if (!emailResult.success) {
+            // Clean up cache if sending failed
+            otpCache.del(user.id);
+            console.error('❌ Failed to send OTP email:', emailResult.error);
+            return res.status(500).json({
+                error: 'Failed to send OTP email. Please try again later.'
+            });
+        }
+        
+        console.log(`📧 OTP sent to email: ${user.email}`);
+        
+        /* 🔒 SMS TEMPORARILY DISABLED - Uncomment when Twilio number is ready
+        if (isEmail) {
+            const emailResult = await sendOtpEmail(user.email, otp);
+            sendSuccess = emailResult.success;
+        } else {
+            sendSuccess = await sendOTPviaSMS(user.phone, otp);
+        }
+        
+        if (!sendSuccess) {
+            otpCache.del(user.id);
+            return res.status(500).json({
+                error: 'Failed to send OTP. Please try again later.'
+            });
+        }
+        */
+
+        res.status(200).json({
+            success: true,
+            userId: user.id,
+            message: 'OTP sent successfully'
+        });
+
+    } catch (error) {
+        console.error('❌ Forgot Password Error:', error);
+        res.status(500).json({
+            error: 'Server error. Please try again later.'
+        });
+    }
+};
+
+/**
+ * Step 2: Verify OTP
+ * POST /auth/verify-otp
+ * Body: { userId, otp }
+ */
+export const verifyOTP = async (req, res) => {
+    try {
+        const { userId, otp } = req.body;
+
+        // Validate input
+        if (!userId || !otp) {
+            return res.status(400).json({
+                error: 'User ID and OTP are required'
+            });
+        }
+
+        // Retrieve OTP from cache
+        const cachedOTP = otpCache.get(userId);
+
+        // Check if OTP exists and matches
+        if (!cachedOTP || cachedOTP !== otp.toString()) {
+            return res.status(400).json({
+                error: 'Invalid or expired OTP'
+            });
+        }
+
+        // Set verified flag in cache
+        otpCache.set(`${userId}_verified`, true);
+        console.log(`✅ OTP verified for user: ${userId}`);
+
+        res.status(200).json({
+            success: true
+        });
+
+    } catch (error) {
+        console.error('❌ Verify OTP Error:', error);
+        res.status(500).json({
+            error: 'Server error. Please try again later.'
+        });
+    }
+};
+
+/**
+ * Step 3: Reset password (requires verified OTP)
+ * POST /auth/reset-password
+ * Body: { userId, newPassword }
+ */
+export const resetPassword = async (req, res) => {
+    try {
+        const { userId, newPassword } = req.body;
+
+        // Validate input
+        if (!userId || !newPassword) {
+            return res.status(400).json({
+                error: 'User ID and new password are required'
+            });
+        }
+
+        // Validate password strength
+        if (!isValidPassword(newPassword)) {
+            return res.status(400).json({
+                error: 'Password must be at least 6 characters long'
+            });
+        }
+
+        // Check if OTP was verified
+        const isVerified = otpCache.get(`${userId}_verified`);
+        if (!isVerified) {
+            return res.status(400).json({
+                error: 'OTP verification required. Please verify your OTP first.'
+            });
+        }
+
+        // Hash new password with bcrypt (salt rounds = 10)
+        const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+        // Update password in database
+        const { error: updateError } = await supabase
+            .from('users')
+            .update({ password: hashedPassword })
+            .eq('id', userId);
+
+        if (updateError) {
+            console.error('❌ Password update error:', updateError);
+            return res.status(500).json({
+                error: 'Failed to update password'
+            });
+        }
+
+        // Clean up cache - remove OTP and verified flag
+        otpCache.del(userId);
+        otpCache.del(`${userId}_verified`);
+        console.log(`✅ Password reset successful for user: ${userId}`);
+
+        res.status(200).json({
+            success: true,
+            message: 'Password updated successfully'
+        });
+
+    } catch (error) {
+        console.error('❌ Reset Password Error:', error);
+        res.status(500).json({
+            error: 'Server error. Please try again later.'
+        });
+    }
+};
+

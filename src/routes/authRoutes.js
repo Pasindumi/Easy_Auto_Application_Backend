@@ -9,7 +9,11 @@ import {
     getCurrentUser,
     // Legacy Authentication (backward compatibility)
     signup,
-    login
+    login,
+    // Password Reset with OTP
+    forgotPassword,
+    verifyOTP,
+    resetPassword
 } from '../controllers/authController.js';
 import { protect } from '../middlewares/authMiddleware.js';
 
@@ -37,5 +41,12 @@ router.post('/logout-all', protect, logoutAll);
 // ============================================
 router.post('/signup', signup);
 router.post('/login', login);
+
+// ============================================
+// PASSWORD RESET WITH OTP
+// ============================================
+router.post('/forgot', forgotPassword);
+router.post('/verify-otp', verifyOTP);
+router.post('/reset-password', resetPassword);
 
 export default router;
