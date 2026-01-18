@@ -1,4 +1,5 @@
 import supabase from '../config/supabase.js';
+import { uploadFileToS3 } from '../utils/s3Service.js';
 
 // Create a new Car Ad
 export const createAd = async (req, res) => {
@@ -22,27 +23,27 @@ export const createAd = async (req, res) => {
 
         // New Dynamic Fields
         vehicle_type_id,
-        dynamicAttributes, // Array of { attribute_id: uuid, value: any }
+        dynamicAttributes, // Array of { attribute_id: uuid, value: any } or JSON string
 
-        // Images
+        // Images - Fallback for JSON if no files
         images,
     } = req.body;
+
+    const files = req.files || [];
 
     // --- Robust Sanitization for DB Constraints ---
     const toSafeUUID = (val) => (!val || val === "" || val === "undefined") ? null : val;
     const toSafeNumeric = (val) => (!val || val === "" || val === "undefined") ? null : (isNaN(val) ? 0 : parseFloat(val));
     const toSafeInt = (val) => (!val || val === "" || val === "undefined") ? null : (isNaN(val) ? 0 : parseInt(val));
+    const toSafeBool = (val) => val === true || val === 'true';
 
     const safePrice = toSafeNumeric(price);
     const safeVehicleTypeId = toSafeUUID(vehicle_type_id);
-    const safeYear = toSafeUUID(year); // Keep year as text unless DB strictly needs int, but if it is int, use toSafeInt
-    const safeMileage = toSafeUUID(mileage); // Same here
-    const safeEngineCapacity = toSafeUUID(engineCapacity);
+    const safeYear = toSafeInt(year);
+    const safeMileage = toSafeInt(mileage);
+    const safeEngineCapacity = toSafeNumeric(engineCapacity);
 
     // Mapped fields
-    const fuel_type = fuelType;
-    const body_type = bodyType;
-
     try {
         // 1. Create CarAd record
         const { data: adData, error: adError } = await supabase
@@ -76,9 +77,9 @@ export const createAd = async (req, res) => {
                 year: safeYear,
                 mileage: safeMileage,
                 engine_capacity: safeEngineCapacity,
-                fuel_type,
+                fuel_type: fuelType,
                 transmission,
-                body_type,
+                body_type: bodyType,
             },
         ]);
 
@@ -88,42 +89,68 @@ export const createAd = async (req, res) => {
         }
 
         // 3. Insert Dynamic Attributes
-        if (dynamicAttributes && dynamicAttributes.length > 0) {
-            const attrRecords = dynamicAttributes.map(attr => ({
+        let parsedAttributes = dynamicAttributes;
+        if (typeof dynamicAttributes === 'string') {
+            try { parsedAttributes = JSON.parse(dynamicAttributes); } catch (e) { parsedAttributes = []; }
+        }
+
+        if (parsedAttributes && parsedAttributes.length > 0) {
+            const attrRecords = parsedAttributes.map(attr => ({
                 ad_id: adId,
-                attribute_id: attr.attribute_id,
-                value: String(attr.value) // Ensure value is stored as text
+                attribute_id: attr.attribute_id || attr.id, // Fallback
+                value: String(attr.value)
             }));
 
-            const { error: attrError } = await supabase
-                .from('car_details_attribute_values')
-                .insert(attrRecords);
+            const validAttrRecords = attrRecords.filter(r => r.attribute_id);
 
-            if (attrError) {
-                console.error("Error adding specific attributes:", attrError);
-                // Non-critical (?) or should rollback? 
-                // Ideally rollback, but for now log error.
+            if (validAttrRecords.length > 0) {
+                const { error: attrError } = await supabase
+                    .from('car_details_attribute_values')
+                    .insert(validAttrRecords);
+
+                if (attrError) console.error("Dynamic Attributes Error:", attrError);
             }
         }
 
-        // 4. Insert Images
-        if (images && images.length > 0) {
-            const imageRecords = images.map((url, index) => ({
+        // 4. Handle Images (S3 or JSON fallback)
+        let uploadedUrls = [];
+        if (files && files.length > 0) {
+            const uploadPromises = files.map(file =>
+                uploadFileToS3(file.buffer, file.originalname, file.mimetype)
+            );
+            uploadedUrls = await Promise.all(uploadPromises);
+        }
+
+        let existingUrls = [];
+        if (images) {
+            if (typeof images === 'string' && images.startsWith('[')) {
+                try { existingUrls = JSON.parse(images); } catch (e) { existingUrls = [images]; }
+            } else {
+                existingUrls = Array.isArray(images) ? images : [images];
+            }
+        }
+
+        const finalImageUrls = [...existingUrls, ...uploadedUrls];
+
+        if (finalImageUrls.length > 0) {
+            const imageRecords = finalImageUrls.map((url, index) => ({
                 ad_id: adId,
                 image_url: url,
-                is_primary: index === 0,
+                is_primary: index === 0
             }));
 
-            const { error: imageError } = await supabase
+            const { error: imgError } = await supabase
                 .from("AdImage")
                 .insert(imageRecords);
 
-            if (imageError) {
-                console.error("Error adding images:", imageError);
-            }
+            if (imgError) console.error("Image Insert Error:", imgError);
         }
 
-        res.status(201).json({ success: true, data: adData });
+        res.status(201).json({
+            success: true,
+            message: "Car ad created successfully!",
+            data: adData,
+        });
     } catch (error) {
         console.error("Error creating ad:", error);
         res.status(500).json({ success: false, message: error.message });
@@ -132,19 +159,176 @@ export const createAd = async (req, res) => {
 
 // Update Ad
 export const updateAd = async (req, res) => {
-    const { id } = req.params;
-    const updates = req.body;
+    const { id: adId } = req.params;
+    const {
+        title,
+        price,
+        location,
+        description,
+        status,
+        negotiable,
+
+        // Static Car Details
+        condition,
+        brand,
+        model,
+        year,
+        mileage,
+        engineCapacity,
+        fuelType,
+        transmission,
+        bodyType,
+
+        // New Dynamic Fields
+        vehicle_type_id,
+        dynamicAttributes,
+
+        // Images
+        images,
+    } = req.body;
+
+    const files = req.files || [];
+
+    // --- Sanitization ---
+    const toSafeUUID = (val) => (!val || val === "" || val === "undefined") ? null : val;
+    const toSafeNumeric = (val) => (!val || val === "" || val === "undefined") ? null : (isNaN(val) ? 0 : parseFloat(val));
+    const toSafeBool = (val) => val === true || val === 'true';
 
     try {
-        const { data, error } = await supabase
-            .from("CarAd")
-            .update(updates)
-            .eq("id", id)
-            .select()
-            .single();
+        // 1. Prepare CarAd updates
+        const adUpdates = {};
+        if (title !== undefined) adUpdates.title = title;
+        if (price !== undefined) adUpdates.price = toSafeNumeric(price);
+        if (location !== undefined) adUpdates.location = location;
+        if (description !== undefined) adUpdates.description = description;
+        if (status !== undefined) adUpdates.status = status;
+        if (vehicle_type_id !== undefined) adUpdates.vehicle_type_id = toSafeUUID(vehicle_type_id);
 
-        if (error) throw error;
-        res.json({ success: true, data });
+        let adData = null;
+        if (Object.keys(adUpdates).length > 0) {
+            const { data, error: adError } = await supabase
+                .from("CarAd")
+                .update(adUpdates)
+                .eq("id", adId)
+                .select()
+                .single();
+            if (adError) throw adError;
+            adData = data;
+        }
+
+        // 2. Prepare/Update CarDetails record
+        const detailsUpdates = {};
+        if (condition !== undefined) detailsUpdates.condition = condition;
+        if (brand !== undefined) detailsUpdates.brand = brand;
+        if (model !== undefined) detailsUpdates.model = model;
+        if (year !== undefined) detailsUpdates.year = toSafeNumeric(year);
+        if (mileage !== undefined) detailsUpdates.mileage = toSafeNumeric(mileage);
+        if (engineCapacity !== undefined) detailsUpdates.engine_capacity = toSafeNumeric(engineCapacity);
+        if (fuelType !== undefined) detailsUpdates.fuel_type = fuelType;
+        if (transmission !== undefined) detailsUpdates.transmission = transmission;
+        if (bodyType !== undefined) detailsUpdates.body_type = bodyType;
+
+        if (Object.keys(detailsUpdates).length > 0) {
+            // Try updating first
+            const { data: existingDetails, error: checkError } = await supabase
+                .from("CarDetails")
+                .select("id")
+                .eq("ad_id", adId)
+                .single();
+
+            if (existingDetails) {
+                const { error: updateError } = await supabase
+                    .from("CarDetails")
+                    .update(detailsUpdates)
+                    .eq("ad_id", adId);
+
+                if (updateError) throw updateError;
+            } else {
+                // If not found, insert
+                const { error: insertError } = await supabase
+                    .from("CarDetails")
+                    .insert({
+                        ad_id: adId,
+                        ...detailsUpdates
+                    });
+
+                if (insertError) throw insertError;
+            }
+        }
+
+        // 3. Update Dynamic Attributes
+        if (dynamicAttributes !== undefined) {
+            await supabase.from('car_details_attribute_values').delete().eq('ad_id', adId);
+
+            let parsedAttributes = dynamicAttributes;
+            if (typeof dynamicAttributes === 'string') {
+                try { parsedAttributes = JSON.parse(dynamicAttributes); } catch (e) { parsedAttributes = []; }
+            }
+
+            if (parsedAttributes && parsedAttributes.length > 0) {
+                console.log("Updating Attributes:", JSON.stringify(parsedAttributes));
+                const attrRecords = parsedAttributes.map(attr => ({
+                    ad_id: adId,
+                    attribute_id: attr.attribute_id || attr.id, // Fallback
+                    value: String(attr.value)
+                }));
+
+                const validAttrRecords = attrRecords.filter(r => r.attribute_id);
+
+                if (validAttrRecords.length > 0) {
+                    const { error: attrError } = await supabase
+                        .from('car_details_attribute_values')
+                        .insert(validAttrRecords);
+
+                    if (attrError) console.error("Error updating attributes:", attrError);
+                }
+            }
+        }
+
+        // 4. Update Images
+        if ((files && files.length > 0) || images !== undefined) {
+            await supabase.from("AdImage").delete().eq("ad_id", adId);
+
+            let uploadedUrls = [];
+            if (files && files.length > 0) {
+                const uploadPromises = files.map(file =>
+                    uploadFileToS3(file.buffer, file.originalname, file.mimetype)
+                );
+                uploadedUrls = await Promise.all(uploadPromises);
+            }
+
+            let existingUrls = [];
+            if (images) {
+                if (typeof images === 'string' && images.startsWith('[')) {
+                    try { existingUrls = JSON.parse(images); } catch (e) { existingUrls = [images]; }
+                } else {
+                    existingUrls = Array.isArray(images) ? images : [images];
+                }
+            }
+
+            const finalImageUrls = [...existingUrls, ...uploadedUrls];
+
+            if (finalImageUrls.length > 0) {
+                const imageRecords = finalImageUrls.map((url, index) => ({
+                    ad_id: adId,
+                    image_url: url,
+                    is_primary: index === 0,
+                }));
+
+                const { error: imgError } = await supabase
+                    .from("AdImage")
+                    .insert(imageRecords);
+
+                if (imgError) console.error("Error updating images:", imgError);
+            }
+        }
+
+        if (!adData) {
+            const { data: currentAd } = await supabase.from('CarAd').select('*').eq('id', adId).single();
+            adData = currentAd;
+        }
+
+        res.json({ success: true, data: adData });
     } catch (error) {
         console.error("Error updating ad:", error);
         res.status(500).json({ success: false, message: error.message });
@@ -210,6 +394,7 @@ export const getAdById = async (req, res) => {
         AdImage(*),
         vehicle_type:vehicle_types(*),
         attributes:car_details_attribute_values(
+            attribute_id,
             value,
             attribute:vehicle_attributes(attribute_name, unit, data_type)
         )
@@ -222,6 +407,40 @@ export const getAdById = async (req, res) => {
         if (!adData) {
             return res.status(404).json({ success: false, message: "Ad not found" });
         }
+
+        // --- Manual Fix for Missing Attribute Relations ---
+        if (adData.attributes && adData.attributes.length > 0) {
+            const missingAttrIds = adData.attributes
+                .filter(a => !a.attribute && a.attribute_id)
+                .map(a => a.attribute_id);
+
+            console.log("Ad ID:", id, "Missing Attr IDs:", missingAttrIds);
+
+            if (missingAttrIds.length > 0) {
+                const uniqueIds = [...new Set(missingAttrIds)];
+                const { data: attrInfo, error: attrError } = await supabase
+                    .from('vehicle_attributes')
+                    .select('id, attribute_name, unit, data_type')
+                    .in('id', uniqueIds);
+
+                if (attrError) console.error("Error fetching manual attributes:", attrError);
+                if (!attrError && attrInfo) {
+                    const attrMap = attrInfo.reduce((acc, item) => {
+                        acc[item.id] = item;
+                        return acc;
+                    }, {});
+
+                    // Attach manual data
+                    adData.attributes.forEach(a => {
+                        if (!a.attribute && a.attribute_id) {
+                            a.attribute = attrMap[a.attribute_id] || null;
+                        }
+                    });
+                }
+            }
+        }
+
+        console.log("Final Ad Data Attributes:", JSON.stringify(adData.attributes, null, 2));
 
         // Fetch seller details separately
         let sellerDetails = null;
@@ -253,6 +472,85 @@ export const getAdById = async (req, res) => {
     }
 };
 
+// Get My Ads (Authenticated User)
+export const getMyAds = async (req, res) => {
+    const userId = req.user.id; // Assumes protect middleware sets req.user
+    const { status } = req.query; // Optional filter: ?status=ACTIVE
+
+    try {
+        let query = supabase
+            .from("CarAd")
+            .select(`
+                *,
+                CarDetails(*),
+                AdImage(*),
+                vehicle_type:vehicle_types(type_name),
+                attributes:car_details_attribute_values(
+                    attribute_id,
+                    value,
+                    attribute:vehicle_attributes(attribute_name, unit, data_type)
+                )
+            `)
+            .eq("seller_id", userId)
+            .order('created_at', { ascending: false });
+
+        if (status && status !== 'all') {
+            query = query.eq('status', status);
+        }
+
+        const { data, error } = await query;
+
+        if (error) throw error;
+
+        // --- Manual Fix for Missing Attribute Relations (MyAds) ---
+        if (data && data.length > 0) {
+            let missingAttrIds = [];
+            data.forEach(ad => {
+                if (ad.attributes && ad.attributes.length > 0) {
+                    ad.attributes.forEach(a => {
+                        if (!a.attribute && a.attribute_id) {
+                            missingAttrIds.push(a.attribute_id);
+                        }
+                    });
+                }
+            });
+
+            if (missingAttrIds.length > 0) {
+                const uniqueIds = [...new Set(missingAttrIds)];
+                const { data: attrInfo, error: attrError } = await supabase
+                    .from('vehicle_attributes')
+                    .select('id, attribute_name, unit, data_type')
+                    .in('id', uniqueIds);
+
+                if (!attrError && attrInfo) {
+                    const attrMap = attrInfo.reduce((acc, item) => {
+                        acc[item.id] = item;
+                        return acc;
+                    }, {});
+
+                    data.forEach(ad => {
+                        if (ad.attributes) {
+                            ad.attributes.forEach(a => {
+                                if (!a.attribute && a.attribute_id) {
+                                    a.attribute = attrMap[a.attribute_id] || null;
+                                }
+                            });
+                        }
+                    });
+                }
+            }
+        }
+
+        res.json({
+            success: true,
+            data
+        });
+    } catch (error) {
+        console.error("Error fetching my ads:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 // --- ADMIN FUNCTIONS ---
 
 // Admin: Get All Ads (with filters for Status)
@@ -267,7 +565,13 @@ export const adminGetAds = async (req, res) => {
             .select(`
                 *,
                 vehicle_type:vehicle_types(type_name),
-                seller:users(name, email)
+                CarDetails(*),
+                AdImage(*),
+                attributes:car_details_attribute_values(
+                    attribute_id,
+                    value,
+                    attribute:vehicle_attributes(attribute_name, unit, data_type)
+                )
             `, { count: 'exact' })
             .range(start, end)
             .order('created_at', { ascending: false });
@@ -284,6 +588,69 @@ export const adminGetAds = async (req, res) => {
 
         if (error) throw error;
 
+        // --- Manual Fix for Missing Attribute Relations ---
+        if (data && data.length > 0) {
+            let missingAttrIds = [];
+            data.forEach(ad => {
+                if (ad.attributes && ad.attributes.length > 0) {
+                    ad.attributes.forEach(a => {
+                        if (!a.attribute && a.attribute_id) {
+                            missingAttrIds.push(a.attribute_id);
+                        }
+                    });
+                }
+            });
+
+            console.log("AdminGetAds Missing IDs:", missingAttrIds);
+
+            if (missingAttrIds.length > 0) {
+                const uniqueIds = [...new Set(missingAttrIds)];
+                const { data: attrInfo, error: attrError } = await supabase
+                    .from('vehicle_attributes')
+                    .select('id, attribute_name, unit, data_type')
+                    .in('id', uniqueIds);
+
+                if (attrError) console.error("Admin Manual Fetch Error:", attrError);
+
+                if (!attrError && attrInfo) {
+                    const attrMap = attrInfo.reduce((acc, item) => {
+                        acc[item.id] = item;
+                        return acc;
+                    }, {});
+
+                    data.forEach(ad => {
+                        if (ad.attributes) {
+                            ad.attributes.forEach(a => {
+                                if (!a.attribute && a.attribute_id) {
+                                    a.attribute = attrMap[a.attribute_id] || null;
+                                }
+                            });
+                        }
+                    });
+                }
+            }
+        }
+
+        // Fetch seller details separately to avoid join issues
+        const sellerIds = [...new Set(data.map(ad => ad.seller_id).filter(Boolean))];
+        if (sellerIds.length > 0) {
+            const { data: usersData, error: usersError } = await supabase
+                .from('users')
+                .select('id, name, email')
+                .in('id', sellerIds);
+
+            if (!usersError && usersData) {
+                const userMap = usersData.reduce((acc, user) => {
+                    acc[user.id] = user;
+                    return acc;
+                }, {});
+
+                data.forEach(ad => {
+                    ad.seller = userMap[ad.seller_id] || null;
+                });
+            }
+        }
+
         res.json({
             success: true,
             data,
@@ -295,6 +662,7 @@ export const adminGetAds = async (req, res) => {
         });
 
     } catch (error) {
+        console.error("Error in adminGetAds:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
