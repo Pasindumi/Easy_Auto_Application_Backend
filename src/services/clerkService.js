@@ -1,179 +1,145 @@
-import { createClerkClient } from '@clerk/clerk-sdk-node';
+import { verifyToken } from "@clerk/express";
+import { createClerkClient } from "@clerk/backend";
 
 /**
  * Clerk Integration Service
- * Handles Clerk session verification
+ * Handles Clerk session token verification using @clerk/express
  */
 
 const CLERK_SECRET_KEY = process.env.CLERK_SECRET_KEY;
-const CLERK_PUBLISHABLE_KEY = process.env.CLERK_PUBLISHABLE_KEY;
 
 if (!CLERK_SECRET_KEY && process.env.NODE_ENV !== 'development') {
   console.warn('⚠️  CLERK_SECRET_KEY is not set. Clerk authentication will not work.');
 }
 
-// Initialize Clerk client
+// Initialize Clerk backend client for user fetches
 const clerkClient = CLERK_SECRET_KEY ? createClerkClient({ secretKey: CLERK_SECRET_KEY }) : null;
 
 /**
- * Verify Clerk session token using @clerk/clerk-sdk-node
- * @param {string} sessionToken - Clerk session token from client (JWT or session ID)
- * @returns {Object} - Verified session with user data
+ * Verify Clerk session token using @clerk/express
+ * Accepts JWT tokens from React Native (@clerk/clerk-expo)
+ * @param {string} token - Clerk JWT token from client (from getToken())
+ * @returns {Object} - Verified token payload with user data
  */
-export const verifyClerkToken = async (sessionToken) => {
-  if (!CLERK_SECRET_KEY || !clerkClient) {
+export const verifyClerkToken = async (token) => {
+  if (!CLERK_SECRET_KEY) {
     console.error('❌ CLERK_SECRET_KEY is not configured');
     throw new Error('Clerk is not configured. Please set CLERK_SECRET_KEY environment variable.');
   }
 
   try {
     console.log('🔐 Verifying Clerk token...');
-    console.log('Token length:', sessionToken?.length);
-    console.log('Token preview:', sessionToken?.substring(0, 30) + '...');
-    console.log('Secret key configured:', !!CLERK_SECRET_KEY);
+    console.log('Token length:', token?.length);
+    console.log('Token preview:', token?.substring(0, 30) + '...');
 
-    let session;
-    let userId;
+    // Verify the JWT token using @clerk/express
+    const decoded = await verifyToken(token, {
+      secretKey: CLERK_SECRET_KEY,
+    });
 
-    // Check if token is a session ID (starts with 'sess_') or a JWT
-    if (sessionToken.startsWith('sess_')) {
-      console.log('📋 Token appears to be a session ID');
-      // Get session by ID
-      session = await clerkClient.sessions.getSession(sessionToken);
-      userId = session.userId;
-    } else {
-      console.log('📋 Token appears to be a JWT, verifying...');
-      // For JWT tokens, we need to verify and get the session
-      // Try to verify the JWT token directly
-      try {
-        session = await clerkClient.sessions.verifySession(sessionToken, sessionToken);
-        userId = session.userId;
-      } catch (verifyError) {
-        console.log('⚠️  Direct verification failed, trying to get user from token...');
-        // If that fails, try to decode and get user
-        // The frontend might be sending the user's session token from getToken()
-        // In that case, we should use verifyToken from @clerk/backend
-        const { verifyToken } = await import('@clerk/backend');
-        const decoded = await verifyToken(sessionToken, {
-          secretKey: CLERK_SECRET_KEY,
-          jwtKey: CLERK_PUBLISHABLE_KEY
-        });
-        
-        if (!decoded || !decoded.sub) {
-          throw new Error('Invalid token payload');
-        }
-        
-        userId = decoded.sub;
-        // Create a mock session object since we verified the JWT
-        session = { id: decoded.sid || 'jwt-verified', userId: decoded.sub };
-      }
+    if (!decoded || !decoded.sub) {
+      console.error('❌ Token verification returned invalid payload');
+      throw new Error('Invalid token payload');
     }
 
-    if (!session || !userId) {
-      console.error('❌ Session verification returned invalid data');
-      throw new Error('Invalid session token');
-    }
+    console.log('✅ Token verified successfully');
+    console.log('Clerk User ID:', decoded.sub);
 
-    console.log('✅ Session verified successfully');
-    console.log('Session ID:', session.id);
-    console.log('User ID:', userId);
-
-    // Fetch user details to get email and name
-    const user = await clerkClient.users.getUser(userId);
-
-    if (!user) {
-      console.error('❌ Failed to fetch user details');
-      throw new Error('Failed to fetch user details');
-    }
-
-    console.log('✅ User details fetched successfully');
-    console.log('User email:', user.emailAddresses?.[0]?.emailAddress);
+    // Extract email from the token
+    // The token should contain the user's email
+    const email = decoded.email || null;
     
-    // Return standardized payload similar to JWT token
+    console.log('📋 Token payload:', {
+      sub: decoded.sub,
+      email: email,
+      aud: decoded.aud,
+      iss: decoded.iss,
+    });
+
+    // Return standardized payload
     return {
-      sub: user.id,
-      email: user.emailAddresses?.[0]?.emailAddress || user.primaryEmailAddress?.emailAddress || null,
-      first_name: user.firstName || null,
-      last_name: user.lastName || null,
-      phone_number: user.phoneNumbers?.[0]?.phoneNumber || user.primaryPhoneNumber?.phoneNumber || null,
-      image_url: user.imageUrl || user.profileImageUrl || null,
-      sessionId: session.id
+      sub: decoded.sub,
+      email: email,
+      sessionId: decoded.sid || null,
+      orgId: decoded.org_id || null,
+      orgSlug: decoded.org_slug || null,
+      // Raw decoded token for additional data
+      decoded: decoded
     };
   } catch (error) {
     console.error('❌ Clerk token verification error:');
     console.error('Error name:', error.name);
     console.error('Error message:', error.message);
-    console.error('Error stack:', error.stack);
     
-    // Check for specific Clerk error messages
-    if (error.message?.includes('not signed in') || error.message?.includes('Not signed in')) {
-      throw new Error('Clerk session invalid or expired. Please sign in again.');
-    } else if (error.message?.includes('not found') || error.status === 404) {
-      throw new Error('Session not found or expired');
-    } else if (error.message?.includes('unauthorized') || error.status === 401) {
-      throw new Error('Invalid session token');
-    } else if (error.message?.includes('expired')) {
-      throw new Error('Token has expired');
-    } else if (error.clerkError) {
-      // Handle Clerk-specific errors
-      throw new Error(error.message || 'Clerk authentication failed');
+    if (error.message?.includes('expired')) {
+      throw new Error('Token has expired. Please sign in again.');
+    } else if (error.message?.includes('invalid') || error.message?.includes('malformed')) {
+      throw new Error('Invalid or malformed token.');
+    } else if (error.message?.includes('no valid signature')) {
+      throw new Error('Token signature verification failed.');
     }
 
-    throw error; // Re-throw to handle in controller
+    throw error;
   }
 };
 
 /**
- * Fetch full user details from Clerk Backend API
- * @param {string} userId - Clerk User ID (sub)
- * @returns {Object} - Complete user object from Clerk
+ * Get user details from Clerk (requires backend API call)
+ * Note: @clerk/express doesn't provide user fetching; this would require 
+ * using Clerk's REST API directly if needed
+ * @param {string} userId - Clerk User ID
+ * @returns {Object} - User data from database should be used instead
  */
 export const getUser = async (userId) => {
-  if (!CLERK_SECRET_KEY || !clerkClient) {
-    throw new Error('Clerk is not configured');
+  if (!clerkClient) {
+    throw new Error('Clerk backend client not initialized');
   }
 
   try {
-    console.log(`📡 Fetching full Clerk profile for: ${userId}...`);
-
-    // Use Clerk client to fetch user
+    console.log(`📡 Fetching Clerk user profile for: ${userId}`);
     const userData = await clerkClient.users.getUser(userId);
 
     if (!userData) {
       throw new Error('User not found');
     }
 
-    console.log('✅ Clerk profile fetched successfully');
-
+    // Normalize fields we care about
     return {
       id: userData.id,
-      email: userData.emailAddresses?.[0]?.emailAddress || userData.primaryEmailAddress?.emailAddress || null,
-      first_name: userData.firstName,
-      last_name: userData.lastName,
-      image_url: userData.imageUrl || userData.profileImageUrl,
-      phone_number: userData.phoneNumbers?.[0]?.phoneNumber || userData.primaryPhoneNumber?.phoneNumber || null
+      email:
+        userData?.emailAddresses?.[0]?.emailAddress ||
+        userData?.primaryEmailAddress?.emailAddress ||
+        null,
+      first_name: userData.firstName || null,
+      last_name: userData.lastName || null,
+      image_url: userData.imageUrl || userData.profileImageUrl || null,
+      phone_number:
+        userData?.phoneNumbers?.[0]?.phoneNumber ||
+        userData?.primaryPhoneNumber?.phoneNumber ||
+        null,
+      external_accounts: userData.externalAccounts || []
     };
   } catch (error) {
-    console.error('❌ Error fetching user from Clerk:', error.message);
+    console.error('❌ Error fetching Clerk user:', error.message);
     throw error;
   }
 };
 
 /**
  * Verify Clerk webhook signature
+ * For use with Clerk webhooks (not token verification)
  * @param {Object} req - Express request object
  * @param {string} webhookSecret - Clerk webhook secret
  * @returns {boolean} - Whether signature is valid
  */
 export const verifyClerkWebhook = (req, webhookSecret) => {
   // Clerk webhook verification logic
-  // Implementation depends on Clerk's webhook signature verification
   const signature = req.headers['svix-signature'];
   const timestamp = req.headers['svix-timestamp'];
   const payload = JSON.stringify(req.body);
 
-  // TODO: Implement actual signature verification
-  // This is a placeholder - refer to Clerk docs for actual implementation
+  // TODO: Implement actual signature verification using Clerk's Svix webhook verification
+  // Refer to Clerk docs for svix verification
 
   return true;
 };
