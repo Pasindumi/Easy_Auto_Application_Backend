@@ -87,32 +87,38 @@ const sanitizeUser = (user) => {
 // ============================================
 
 /**
- * Authenticate user with Clerk session token
+ * Authenticate user with Clerk token via @clerk/express
  * POST /auth/clerk
  * Headers: Authorization: Bearer <clerk_token>
+ * 
+ * This endpoint:
+ * 1. Verifies Clerk JWT token from React Native client
+ * 2. Extracts Clerk user ID and email
+ * 3. Creates or updates user in PostgreSQL
+ * 4. Returns backend JWT tokens for session management
  */
 export const clerkAuth = async (req, res) => {
     try {
-        // Debug logging
-        console.log('=== Clerk OAuth Request ===');
-        console.log('Received Authorization:', req.headers.authorization?.substring(0, 50) + '...');
-        console.log('CLERK_SECRET_KEY exists:', !!process.env.CLERK_SECRET_KEY);
-
+        console.log('=== Clerk Auth Request ===');
+        
         // Extract token from Authorization header
-        const token = req.headers.authorization?.split(' ')[1];
+        const authHeader = req.headers.authorization;
+        const token = authHeader?.split(' ')[1];
 
         if (!token) {
             console.log('❌ No token found in Authorization header');
-            return res.status(400).json({
+            return res.status(401).json({
                 success: false,
                 error: 'Authorization header with Bearer token is required',
                 code: 'MISSING_TOKEN'
             });
         }
 
-        // Verify Clerk session token using @clerk/backend
-        let payload;
+        console.log('Received Authorization:', authHeader?.substring(0, 50) + '...');
+        console.log('CLERK_SECRET_KEY exists:', !!process.env.CLERK_SECRET_KEY);
 
+        // Verify Clerk token using @clerk/express SDK
+        let payload;
         try {
             console.log('🔍 Verifying token with Clerk...');
             payload = await clerkService.verifyClerkToken(token);
@@ -121,7 +127,7 @@ export const clerkAuth = async (req, res) => {
                 console.log('❌ Token verification returned invalid payload');
                 return res.status(401).json({
                     success: false,
-                    error: 'Failed to verify with authentication provider',
+                    error: 'Failed to verify authentication token',
                     code: 'AUTH_PROVIDER_ERROR'
                 });
             }
@@ -130,72 +136,54 @@ export const clerkAuth = async (req, res) => {
             console.log('Clerk User ID:', payload.sub);
         } catch (clerkError) {
             console.error('❌ Clerk verification error:', clerkError.message);
-            console.error('Error details:', clerkError);
             
-            // Provide more specific error messages to frontend
-            let errorMessage = 'Failed to verify with authentication provider';
-            if (clerkError.message?.includes('not signed in') || clerkError.message?.includes('Not signed in')) {
-                errorMessage = 'Not signed in with Clerk. Please authenticate again.';
-            } else if (clerkError.message?.includes('expired')) {
-                errorMessage = 'Clerk session expired. Please sign in again.';
-            } else if (clerkError.message?.includes('invalid')) {
-                errorMessage = 'Invalid Clerk session token.';
+            let errorMessage = 'Failed to verify authentication token';
+            if (clerkError.message?.includes('expired')) {
+                errorMessage = 'Authentication session expired. Please sign in again.';
+            } else if (clerkError.message?.includes('invalid') || clerkError.message?.includes('malformed')) {
+                errorMessage = 'Invalid authentication token.';
+            } else if (clerkError.message?.includes('signature')) {
+                errorMessage = 'Token signature verification failed.';
             }
 
             return res.status(401).json({
                 success: false,
                 error: errorMessage,
-                code: 'AUTH_PROVIDER_ERROR',
-                details: clerkError.message
+                code: 'AUTH_PROVIDER_ERROR'
             });
         }
 
-        // Extract user data from token payload
+        // Extract user data from Clerk token payload
         const clerkUserId = payload.sub;
         let email = payload.email || null;
-        let firstName = payload.first_name || null;
-        let lastName = payload.last_name || null;
-        let imageUrl = payload.image_url || payload.avatar_url || null;
-        let phone = payload.phone_number || null;
 
-        // CRITICAL: If data is missing (common with default session tokens), 
-        // fetch the full profile from Clerk Backend API
-        if (!email || !firstName) {
-            console.log('⚠️  User data missing in token. Fetching full profile from Clerk...');
+        console.log('📋 Extracted from Clerk token:', { clerkUserId, email });
+
+        // If email is missing in JWT (common for some providers), fetch from Clerk backend
+        if (!email) {
+            console.log('⚠️  Email missing in token. Fetching profile from Clerk...');
             try {
                 const fullUser = await clerkService.getUser(clerkUserId);
-                email = email || fullUser.email;
-                firstName = firstName || fullUser.first_name;
-                lastName = lastName || fullUser.last_name;
-                imageUrl = imageUrl || fullUser.image_url;
-                phone = phone || fullUser.phone_number;
-                console.log('✅ Full profile retrieved:', { email, firstName, lastName });
-            } catch (err) {
-                console.warn('⚠️  Could not fetch full Clerk profile. Proceeding with token data.');
+                email = fullUser.email || null;
+                console.log('✅ Email fetched from Clerk:', email);
+            } catch (e) {
+                console.warn('⚠️  Could not fetch email from Clerk:', e.message);
             }
         }
 
-        const name = [firstName, lastName].filter(Boolean).join(' ') || null;
-
-        console.log('📋 Extracted data:', { clerkUserId, email, phone, name });
-
-        // Determine the auth provider from Clerk user data
-        // Try to get full Clerk user to determine provider
-        let authProvider = 'clerk'; // default
+        // Determine auth provider (default 'clerk')
+        let authProvider = 'clerk';
         try {
             const fullClerkUser = await clerkService.getUser(clerkUserId);
             authProvider = mapClerkProviderToAuthProvider(fullClerkUser);
-            console.log('🔐 Determined auth provider:', authProvider);
-        } catch (err) {
-            console.warn('⚠️  Could not determine specific provider, using default: clerk');
-        }
+        } catch {}
 
-        // Account merging logic - priority: clerk_user_id → email → phone
+        // Account lookup and upsert logic
         let user = null;
 
-        // 1. Try to find by clerk_user_id
+        // 1. Try to find by clerk_user_id first
         console.log('🔍 Looking up user by clerk_user_id...');
-        const { data: clerkMatch } = await supabase
+        const { data: clerkMatch, error: clerkQueryError } = await supabase
             .from('users')
             .select('*')
             .eq('clerk_user_id', clerkUserId)
@@ -204,131 +192,80 @@ export const clerkAuth = async (req, res) => {
         if (clerkMatch) {
             console.log('✅ Found existing user by clerk_user_id:', clerkMatch.id);
             user = clerkMatch;
-        } else {
-            // 2. Try to find by email
-            let existingUser = null;
-
+            
+            // Update last_login
+            try {
+                await supabase
+                    .from('users')
+                    .update({ last_login: new Date().toISOString() })
+                    .eq('id', user.id);
+            } catch (err) {
+                console.warn('Failed to update last_login:', err);
+            }
+        } else if (!clerkQueryError || clerkQueryError.code === 'PGRST116') {
+            // User not found by clerk_user_id, try to find by email (if available)
+            let emailMatch = null;
             if (email) {
                 console.log('🔍 Looking up user by email...');
-                const { data: emailMatch } = await supabase
-                    .from('users')
-                    .select('*')
-                    .eq('email', email.toLowerCase().trim())
-                    .single();
-
-                existingUser = emailMatch;
-                if (existingUser) {
-                    console.log('✅ Found existing user by email:', existingUser.id);
-                    console.log('📝 Existing auth_provider:', existingUser.auth_provider);
-                    
-                    // MERGE RULE: Attach clerk_user_id to existing user
-                    // Update auth_provider to social provider
-                    // Do NOT overwrite password if it exists
-                    console.log('🔄 Merging social login with existing account...');
-                    const updateData = {
-                        clerk_user_id: clerkUserId,
-                        auth_provider: authProvider,
-                        email: email || existingUser.email,
-                        name: name || existingUser.name,
-                        avatar: imageUrl || existingUser.avatar,
-                        phone: phone || existingUser.phone,
-                        last_login: new Date().toISOString()
-                    };
-                    
-                    // Only update password if user doesn't have one
-                    if (!existingUser.password) {
-                        updateData.password = null;
-                    }
-                    
-                    const { data: updatedUser, error: updateError } = await supabase
+                let resp;
+                try {
+                    resp = await supabase
                         .from('users')
-                        .update(updateData)
-                        .eq('id', existingUser.id)
-                        .select()
+                        .select('*')
+                        .eq('email', email.toLowerCase().trim())
                         .single();
-
-                    if (updateError) {
-                        console.error('❌ User update error:', updateError);
-                        return res.status(500).json({
-                            success: false,
-                            error: 'Failed to update user',
-                            code: 'DATABASE_ERROR'
-                        });
-                    }
-
-                    console.log('✅ User merged successfully');
-                    user = updatedUser;
+                } catch (e) {
+                    resp = { data: null };
                 }
+                emailMatch = resp?.data || null;
             }
 
-            // 3. Try to find by phone if no email match
-            if (!existingUser && phone) {
-                console.log('🔍 Looking up user by phone...');
-                const { data: phoneMatch } = await supabase
+            if (emailMatch) {
+                console.log('✅ Found existing user by email:', emailMatch.id);
+                console.log('📝 Existing auth_provider:', emailMatch.auth_provider);
+                
+                // MERGE: Update existing user with clerk_user_id
+                console.log('🔄 Merging Clerk login with existing account...');
+                const { data: updatedUser, error: updateError } = await supabase
                     .from('users')
-                    .select('*')
-                    .eq('phone', phone)
-                    .single();
-
-                existingUser = phoneMatch;
-                if (existingUser) {
-                    console.log('✅ Found existing user by phone:', existingUser.id);
-                    
-                    // MERGE RULE: Attach clerk_user_id
-                    console.log('🔄 Updating user with clerk_user_id and social provider...');
-                    const updateData = {
+                    .update({
                         clerk_user_id: clerkUserId,
                         auth_provider: authProvider,
-                        email: email || existingUser.email,
-                        name: name || existingUser.name,
-                        avatar: imageUrl || existingUser.avatar,
-                        phone: phone || existingUser.phone,
+                        email: (email || emailMatch.email)?.toLowerCase()?.trim() || null,
                         last_login: new Date().toISOString()
-                    };
-                    
-                    // Only update password if user doesn't have one
-                    if (!existingUser.password) {
-                        updateData.password = null;
-                    }
-                    
-                    const { data: updatedUser, error: updateError } = await supabase
-                        .from('users')
-                        .update(updateData)
-                        .eq('id', existingUser.id)
-                        .select()
-                        .single();
+                    })
+                    .eq('id', emailMatch.id)
+                    .select()
+                    .single();
 
-                    if (updateError) {
-                        console.error('❌ User update error:', updateError);
-                        return res.status(500).json({
-                            success: false,
-                            error: 'Failed to update user',
-                            code: 'DATABASE_ERROR'
-                        });
-                    }
-
-                    console.log('✅ User updated successfully');
-                    user = updatedUser;
+                if (updateError) {
+                    console.error('❌ User update error:', updateError);
+                    return res.status(500).json({
+                        success: false,
+                        error: 'Failed to update user account',
+                        code: 'DATABASE_ERROR'
+                    });
                 }
-            }
 
-            if (!existingUser) {
-                // No match - create new social user
-                console.log('➕ Creating new social user...');
+                console.log('✅ User merged successfully');
+                user = updatedUser;
+            } else {
+                // Create new user
+                console.log('➕ Creating new Clerk user...');
 
                 const { data: newUser, error: createError } = await supabase
                     .from('users')
                     .insert([{
                         clerk_user_id: clerkUserId,
-                        email: email,
-                        phone: phone,
-                        name: name || 'User',
-                        avatar: imageUrl,
-                        password: null, // Social users don't have passwords
-                        auth_provider: authProvider, // google/apple/facebook/clerk
+                        email: email.toLowerCase().trim(),
+                        name: 'User', // Will be updated if user adds profile info
+                        avatar: null,
+                        password: null, // Clerk users don't have password stored
+                        auth_provider: authProvider,
                         role: 'user',
                         is_premium: false,
-                        created_at: new Date().toISOString()
+                        created_at: new Date().toISOString(),
+                        last_login: new Date().toISOString()
                     }])
                     .select()
                     .single();
@@ -337,36 +274,43 @@ export const clerkAuth = async (req, res) => {
                     console.error('❌ User creation error:', createError);
                     return res.status(500).json({
                         success: false,
-                        error: 'Failed to create user',
+                        error: 'Failed to create user account',
                         code: 'DATABASE_ERROR'
                     });
                 }
 
                 console.log('✅ New user created:', newUser.id);
                 user = newUser;
-            } else if (!user) { // If existingUser was found but not assigned to 'user' yet
-                user = existingUser;
             }
+        } else {
+            console.error('❌ Database query error:', clerkQueryError);
+            return res.status(500).json({
+                success: false,
+                error: 'Database error during user lookup',
+                code: 'DATABASE_ERROR'
+            });
         }
 
-        // Generate backend JWT tokens using JWT_SECRET
+        // Ensure user was found or created
+        if (!user || !user.id) {
+            console.error('❌ User not found or created');
+            return res.status(500).json({
+                success: false,
+                error: 'Failed to process user account',
+                code: 'DATABASE_ERROR'
+            });
+        }
+
+        // Generate backend JWT tokens
         console.log('🔑 Generating JWT tokens...');
         const tokens = await jwtService.generateTokenPair(user);
         console.log('✅ JWT tokens generated successfully');
 
-        // Update last_login (non-blocking)
-        supabase
-            .from('users')
-            .update({ last_login: new Date().toISOString() })
-            .eq('id', user.id)
-            .then(() => {})
-            .catch(err => console.warn('Failed to update last_login:', err));
-
-        // Sanitize and return user (no password in response)
+        // Sanitize user object for response
         const sanitizedUser = sanitizeUser(user);
 
-        // Return accessToken, refreshToken, and user object (matching frontend expectations)
-        console.log('=== Clerk OAuth Success ===');
+        // Return success response
+        console.log('=== Clerk Auth Success ===');
         res.status(200).json({
             success: true,
             accessToken: tokens.accessToken,
@@ -385,12 +329,12 @@ export const clerkAuth = async (req, res) => {
 
     } catch (error) {
         console.error('❌ Clerk Auth Error:', error);
+        console.error('Error details:', error.message);
 
         res.status(500).json({
             success: false,
-            error: 'Internal server error',
-            code: 'SERVER_ERROR',
-            details: error.message
+            error: 'Internal server error during authentication',
+            code: 'SERVER_ERROR'
         });
     }
 };
@@ -732,12 +676,14 @@ export const login = async (req, res) => {
         console.log('✅ User logged in:', user.id, user.email);
 
         // Update last login timestamp (non-blocking)
-        supabase
-            .from('users')
-            .update({ last_login: new Date().toISOString() })
-            .eq('id', user.id)
-            .then(() => {})
-            .catch(err => console.warn('Failed to update last_login:', err));
+        try {
+            await supabase
+                .from('users')
+                .update({ last_login: new Date().toISOString() })
+                .eq('id', user.id);
+        } catch (err) {
+            console.warn('Failed to update last_login:', err);
+        }
 
         // Generate backend JWT access and refresh tokens
         const tokens = await jwtService.generateTokenPair(user);
