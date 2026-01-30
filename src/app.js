@@ -9,6 +9,7 @@ import vehicleConfigRoutes from "./routes/vehicleConfigRoutes.js";
 import pricingRoutes from "./routes/pricingRoutes.js";
 import discountsRoutes from "./routes/discountsRoutes.js";
 import paymentRoutes from "./routes/paymentRoutes.js";
+import userRoutes from "./routes/userRoutes.js";
 import startCronJobs from "./utils/cronJobs.js";
 
 const app = express();
@@ -38,6 +39,7 @@ app.use("/api/vehicle-config", vehicleConfigRoutes); // Vehicle configuration ro
 app.use("/api/pricing", pricingRoutes); // Pricing routes
 app.use("/api/discounts", discountsRoutes); // Discounts routes
 app.use("/api/payment", paymentRoutes); // Payment routes
+app.use("/api/users", userRoutes); // User routes
 
 // Start Cron Jobs
 startCronJobs();
