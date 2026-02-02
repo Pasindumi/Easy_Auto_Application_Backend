@@ -17,8 +17,11 @@ import {
     getPublicPackages,
     getPackageAdLimits,
     addPackageAdLimit,
-    deletePackageAdLimit
+    deletePackageAdLimit,
+    getUserActivePackage,
+    unsubscribeUserPackage
 } from '../controllers/pricingController.js';
+import { protect } from '../middlewares/authMiddleware.js';
 
 const router = express.Router();
 
@@ -51,5 +54,9 @@ router.delete('/package-limits/:id', deletePackageAdLimit);
 
 // Public Routes
 router.get('/public-packages', getPublicPackages);
+
+// User Package Routes
+router.get('/active-package', protect, getUserActivePackage);
+router.post('/unsubscribe', protect, unsubscribeUserPackage);
 
 export default router;
