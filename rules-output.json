@@ -1,0 +1,92 @@
+[
+  {
+    "id": "87fb391b-daaf-4399-b477-2fd2637c29c0",
+    "price_item_id": "6efef120-4411-43a0-82b8-c2d28e83ddc0",
+    "vehicle_type_id": "363e88a2-9301-4d82-aaec-dfc1b15579d8",
+    "price": 15,
+    "unit": "PER_IMAGE",
+    "min_qty": 1,
+    "max_qty": null,
+    "valid_from": null,
+    "valid_to": null,
+    "created_by_admin": null,
+    "created_at": "2026-01-17T10:08:09.96191+00:00",
+    "free_image_count": 0,
+    "description_limit": 500,
+    "price_items": {
+      "code": "EX_IMG",
+      "name": "Extra Image",
+      "item_type": "AD"
+    },
+    "vehicle_types": {
+      "type_name": "van"
+    }
+  },
+  {
+    "id": "4d050635-9d0f-4451-850e-1c2932d503fc",
+    "price_item_id": "fd42abd1-027f-4d96-b666-3b90c7205a14",
+    "vehicle_type_id": "363e88a2-9301-4d82-aaec-dfc1b15579d8",
+    "price": 3000,
+    "unit": "PER_AD",
+    "min_qty": 1,
+    "max_qty": 1,
+    "valid_from": null,
+    "valid_to": null,
+    "created_by_admin": null,
+    "created_at": "2026-02-02T08:42:27.640473+00:00",
+    "free_image_count": 5,
+    "description_limit": 500,
+    "price_items": {
+      "code": "STD_AD",
+      "name": "Standard Advertisement",
+      "item_type": "AD"
+    },
+    "vehicle_types": {
+      "type_name": "van"
+    }
+  },
+  {
+    "id": "6761300e-2bdd-4600-a80c-49889c42f1bb",
+    "price_item_id": "fd42abd1-027f-4d96-b666-3b90c7205a14",
+    "vehicle_type_id": "6432d2b0-21ad-42fa-806f-e0e5d1151bba",
+    "price": 2500,
+    "unit": "PER_AD",
+    "min_qty": 1,
+    "max_qty": 1,
+    "valid_from": null,
+    "valid_to": null,
+    "created_by_admin": null,
+    "created_at": "2026-02-02T08:42:27.356909+00:00",
+    "free_image_count": 8,
+    "description_limit": 500,
+    "price_items": {
+      "code": "STD_AD",
+      "name": "Standard Advertisement",
+      "item_type": "AD"
+    },
+    "vehicle_types": {
+      "type_name": "Car"
+    }
+  },
+  {
+    "id": "89ad6794-ebd2-4647-8967-2c501e8cc3ca",
+    "price_item_id": "11dab024-9795-4d39-8861-b6c850a68296",
+    "vehicle_type_id": null,
+    "price": 5000,
+    "unit": "ONE_TIME",
+    "min_qty": 1,
+    "max_qty": null,
+    "valid_from": null,
+    "valid_to": null,
+    "created_by_admin": null,
+    "created_at": "2026-02-02T12:13:39.475711+00:00",
+    "free_image_count": 0,
+    "description_limit": 500,
+    "price_items": {
+      "code": "G_01",
+      "name": "Gold",
+      "item_type": "PACKAGE"
+    },
+    "vehicle_types": null
+  }
+]
