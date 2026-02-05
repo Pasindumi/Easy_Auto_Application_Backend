@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+        }
+
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+
+        .header {
+            background-color: #ffc107;
+            color: #333;
+            padding: 10px;
+            text-align: center;
+            border-radius: 5px 5px 0 0;
+        }
+
+        .content {
+            padding: 20px;
+        }
+
+        .details {
+            background-color: #f9f9f9;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 15px 0;
+        }
+
+        .footer {
+            margin-top: 20px;
+            font-size: 12px;
+            color: #777;
+            text-align: center;
+        }
+
+        .button {
+            display: inline-block;
+            padding: 10px 20px;
+            background-color: #007bff;
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+            margin: 0 5px;
+        }
+
+        .actions {
+            text-align: center;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="header">
+            <h2>Package Expiry Warning</h2>
+        </div>
+        <div class="content">
+            <p>Dear {{userName}},</p>
+            <p>This is a reminder that your <strong>{{packageName}}</strong> subscription is expiring soon.</p>
+
+            <div class="details">
+                <p><strong>Expiry Date:</strong> {{expiryDate}}</p>
+                <p><strong>Days Remaining:</strong> {{daysRemaining}} days</p>
+            </div>
+
+            <p>Your current ad limits:</p>
+            <ul>
+                {{#each adLimitsByVehicleType}}
+                <li><strong>{{vehicleType}}:</strong> {{limit}}</li>
+                {{/each}}
+            </ul>
+
+            <p>To ensure your ads remain active, please renew your package or upgrade to a higher tier.</p>
+
+            <div class="actions">
+                <a href="{{renewUrl}}" class="button">Renew Package</a>
+                <a href="{{upgradeUrl}}" class="button" style="background-color: #28a745;">Upgrade</a>
+            </div>
+        </div>
+        <div class="footer">
+            <p>&copy; {{year}} Easy Auto. All rights reserved.</p>
+        </div>
+    </div>
+</body>
+
+</html>
