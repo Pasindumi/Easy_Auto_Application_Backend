@@ -337,21 +337,20 @@ export const updateAd = async (req, res) => {
 
 // Get all ads (Public)
 export const getAds = async (req, res) => {
-    const { page = 1, limit = 10, brand, model, minPrice, maxPrice, vehicleTypeId } = req.query;
-    const start = (page - 1) * limit;
-    const end = start + limit - 1;
+    const { page, limit, brand, model, minPrice, maxPrice, vehicleTypeId } = req.query;
+    const pageInt = parseInt(page) || 1;
+    const limitInt = parseInt(limit) || 10;
+    const start = (pageInt - 1) * limitInt;
+    const end = start + limitInt - 1;
 
     try {
         let queryBuilder = supabase
             .from("CarAd")
             .select(`
-            *,
-            CarDetails(*),
-            AdImage(*),
-            vehicle_type:vehicle_types(type_name)
+            *
         `, { count: 'exact' })
             .eq("status", "ACTIVE")
-            .range(start, end);
+        // .range(start, end);
 
         if (minPrice) queryBuilder = queryBuilder.gte("price", minPrice);
         if (maxPrice) queryBuilder = queryBuilder.lte("price", maxPrice);
@@ -371,13 +370,30 @@ export const getAds = async (req, res) => {
             data,
             pagination: {
                 total: count,
-                page: parseInt(page),
-                pages: Math.ceil(count / limit),
+                page: pageInt,
+                pages: Math.ceil(count / limitInt),
             },
         });
     } catch (error) {
         console.error("Error fetching ads:", error);
-        res.status(500).json({ success: false, message: error.message });
+        let errorMessage = error.message || "Unknown error occurred";
+
+        // Check if message is a JSON string (Supabase sometimes does this)
+        if (typeof errorMessage === 'string' && errorMessage.startsWith('{')) {
+            try {
+                const parsed = JSON.parse(errorMessage);
+                errorMessage = parsed.message || parsed.error || errorMessage;
+            } catch (e) {
+                // ignore
+            }
+        }
+
+        res.status(500).json({
+            success: false,
+            message: "DEBUG: " + (error.code || "NO_CODE") + " - " + (typeof error.message) + " - " + error.message,
+            code: error.code || 'UNKNOWN',
+            details: error.details || error.hint
+        });
     }
 };
 
