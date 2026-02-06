@@ -1,4 +1,5 @@
 import supabase from '../config/supabase.js';
+import { uploadFileToS3 } from '../utils/s3Service.js';
 
 // --- Vehicle Types ---
 
@@ -161,16 +162,57 @@ export const getBrandsByType = async (req, res) => {
 export const createBrand = async (req, res) => {
     const { vehicle_type_id, brand_name } = req.body;
     const adminId = req.user.id;
+    const file = req.file;
 
     try {
+        let imageUrl = null;
+        if (file) {
+            imageUrl = await uploadFileToS3(file.buffer, file.originalname, file.mimetype, 'brands');
+        }
+
         const { data, error } = await supabase
             .from('vehicle_brands')
-            .insert([{ vehicle_type_id, brand_name, created_by_admin: adminId }])
+            .insert([{
+                vehicle_type_id,
+                brand_name,
+                brand_image: imageUrl,
+                created_by_admin: adminId
+            }])
             .select()
             .single();
 
         if (error) throw error;
         res.status(201).json(data);
+    } catch (error) {
+        console.error('Vehicle Config Error:', error);
+        res.status(500).json({ message: error.message });
+    }
+};
+
+export const updateBrand = async (req, res) => {
+    const { id } = req.params;
+    const { brand_name, status } = req.body;
+    const file = req.file;
+
+    try {
+        const updateData = {};
+        if (brand_name) updateData.brand_name = brand_name;
+        if (status) updateData.status = status;
+
+        if (file) {
+            const imageUrl = await uploadFileToS3(file.buffer, file.originalname, file.mimetype, 'brands');
+            updateData.brand_image = imageUrl;
+        }
+
+        const { data, error } = await supabase
+            .from('vehicle_brands')
+            .update(updateData)
+            .eq('id', id)
+            .select()
+            .single();
+
+        if (error) throw error;
+        res.json(data);
     } catch (error) {
         console.error('Vehicle Config Error:', error);
         res.status(500).json({ message: error.message });

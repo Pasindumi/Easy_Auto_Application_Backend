@@ -19,9 +19,12 @@ import {
     addPackageAdLimit,
     deletePackageAdLimit,
     getUserActivePackage,
-    unsubscribeUserPackage
+    unsubscribeUserPackage,
+    getAllSubscribers,
+    getSubscriberUsage
 } from '../controllers/pricingController.js';
-import { protect } from '../middlewares/authMiddleware.js';
+import { protect, authorize } from '../middlewares/authMiddleware.js';
+import { protectAdmin } from '../middlewares/adminAuthMiddleware.js';
 
 const router = express.Router();
 
@@ -58,5 +61,9 @@ router.get('/public-packages', getPublicPackages);
 // User Package Routes
 router.get('/active-package', protect, getUserActivePackage);
 router.post('/unsubscribe', protect, unsubscribeUserPackage);
+
+// Admin Subscription Routes
+router.get('/admin/subscribers', protectAdmin, authorize('ADMIN', 'SUPER_ADMIN', 'MODERATOR'), getAllSubscribers);
+router.get('/admin/subscriber-usage/:userId/:packageId', protectAdmin, authorize('ADMIN', 'SUPER_ADMIN', 'MODERATOR'), getSubscriberUsage);
 
 export default router;
