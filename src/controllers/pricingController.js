@@ -575,3 +575,137 @@ export const unsubscribeUserPackage = async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 };
+
+/**
+ * ADMIN: Fetch all active subscribers
+ */
+export const getAllSubscribers = async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('user_subscriptions')
+            .select(`
+                *,
+                users!user_subscriptions_user_id_fkey (id, name, email, phone, avatar),
+                package:price_items!user_subscriptions_package_id_fkey (*)
+            `)
+            .eq('status', 'ACTIVE')
+            .order('created_at', { ascending: false });
+
+        if (error) throw error;
+
+        res.json({
+            success: true,
+            data: data
+        });
+    } catch (error) {
+        console.error("Error fetching subscribers:", error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+};
+
+/**
+ * ADMIN: Get detailed usage for a specific subscriber
+ */
+export const getSubscriberUsage = async (req, res) => {
+    try {
+        const { userId, packageId } = req.params;
+
+        if (!userId || !packageId) {
+            return res.status(400).json({ success: false, message: "User ID and Package ID are required." });
+        }
+
+        // 1. Get the specific subscription
+        const { data: subscription, error: subError } = await supabase
+            .from('user_subscriptions')
+            .select(`
+                *,
+                price_items (*)
+            `)
+            .eq('user_id', userId)
+            .eq('package_id', packageId)
+            .eq('status', 'ACTIVE')
+            .single();
+
+        if (subError || !subscription) {
+            return res.status(404).json({ success: false, message: "Active subscription not found for this user." });
+        }
+
+        // 2. Fetch ad limits for this package
+        const { data: adLimits, error: adError } = await supabase
+            .from('package_ad_limits')
+            .select(`*, vehicle_types (type_name)`)
+            .eq('package_id', packageId);
+
+        if (adError) throw adError;
+
+        // 3. Calculate USAGE based on tracking records in 'payments' table
+        const { data: usageHistory, error: hError } = await supabase
+            .from('payments')
+            .select('order_id')
+            .eq('user_id', userId)
+            .eq('package_id', packageId)
+            .eq('status', 'SUCCESS')
+            .gte('created_at', subscription.start_date);
+
+        if (hError) throw hError;
+
+        // Fetch all vehicle types to map names back to IDs
+        const { data: vTypes, error: vError } = await supabase
+            .from('vehicle_types')
+            .select('id, type_name');
+
+        if (vError) throw vError;
+
+        const typeMap = {};
+        vTypes.forEach(t => {
+            typeMap[t.type_name.toLowerCase()] = t.id;
+        });
+
+        const usageMap = {};
+        usageHistory.forEach(h => {
+            if (h.order_id && h.order_id.startsWith('V-')) {
+                const typeName = h.order_id.replace('V-', '').toLowerCase();
+                const vId = typeMap[typeName];
+                if (vId) {
+                    if (!usageMap[vId]) usageMap[vId] = 0;
+                    usageMap[vId]++;
+                }
+            }
+        });
+
+        // 4. Merge Limits vs Usage
+        const finalLimits = adLimits.map(limit => {
+            const used = usageMap[limit.vehicle_type_id] || 0;
+            const remaining = limit.is_unlimited ? 9999 : Math.max(0, limit.quantity - used);
+            return {
+                ...limit,
+                used_count: used,
+                remaining_count: remaining
+            };
+        });
+
+        // 5. Get Package Features (config)
+        const { data: features, error: featError } = await supabase
+            .from('package_features')
+            .select('*')
+            .eq('price_item_id', packageId);
+
+        if (featError) throw featError;
+
+        const config = {};
+        features.forEach(f => config[f.feature_key] = f.feature_value);
+
+        res.json({
+            success: true,
+            data: {
+                subscription: subscription,
+                limits: finalLimits,
+                config: config
+            }
+        });
+
+    } catch (error) {
+        console.error("Error fetching subscriber usage:", error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+};

@@ -24,6 +24,34 @@ export const getDiscounts = async (req, res) => {
     }
 };
 
+export const getDiscount = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { data, error } = await supabase
+            .from('discounts')
+            .select(`
+                *,
+                discount_vehicle_types (
+                    vehicle_type_id,
+                    vehicle_types (type_name)
+                ),
+                discount_packages (
+                    package_id,
+                    price_items (name)
+                )
+            `)
+            .eq('id', id)
+            .single();
+
+        if (error) throw error;
+        if (!data) return res.status(404).json({ error: 'Discount not found' });
+
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+};
+
 export const getActiveDiscounts = async (req, res) => {
     try {
         const now = new Date().toISOString();
@@ -63,10 +91,25 @@ export const getActiveDiscounts = async (req, res) => {
 
 export const createDiscount = async (req, res) => {
     try {
-        const { name, discount_type, value, is_first_time_user, min_bulk_ads, start_date, end_date, status, vehicle_type_ids, package_ids } = req.body;
+        let { name, discount_type, value, is_first_time_user, min_bulk_ads, start_date, end_date, status, vehicle_type_ids, package_ids, color_theme } = req.body;
+        const file = req.file;
+
+        if (typeof vehicle_type_ids === 'string') vehicle_type_ids = JSON.parse(vehicle_type_ids);
+        if (typeof package_ids === 'string') package_ids = JSON.parse(package_ids);
 
         if (!name || !discount_type || value === undefined) {
             return res.status(400).json({ error: 'Name, discount type, and value are required' });
+        }
+
+        let imageUrl = null;
+        if (file) {
+            try {
+                const { uploadFileToS3 } = await import('../utils/s3Service.js');
+                imageUrl = await uploadFileToS3(file.buffer, file.originalname, file.mimetype, 'discounts');
+            } catch (err) {
+                console.error("S3 Upload Error for Discount:", err);
+                // Continue without image or handle error
+            }
         }
 
         const { data: discount, error: discountError } = await supabase
@@ -75,11 +118,13 @@ export const createDiscount = async (req, res) => {
                 name,
                 discount_type,
                 value: parseFloat(value),
-                is_first_time_user: is_first_time_user || false,
+                is_first_time_user: is_first_time_user === 'true' || is_first_time_user === true || false,
                 min_bulk_ads: parseInt(min_bulk_ads) || 0,
                 start_date: start_date && start_date !== "" ? start_date : null,
                 end_date: end_date && end_date !== "" ? end_date : null,
-                status: status || 'ACTIVE'
+                status: status || 'ACTIVE',
+                color_theme: color_theme || null,
+                offer_image_url: imageUrl
             }])
             .select()
             .single();
@@ -133,20 +178,37 @@ export const createDiscount = async (req, res) => {
 export const updateDiscount = async (req, res) => {
     try {
         const { id } = req.params;
-        const { name, discount_type, value, is_first_time_user, min_bulk_ads, start_date, end_date, status, vehicle_type_ids, package_ids } = req.body;
+        let { name, discount_type, value, is_first_time_user, min_bulk_ads, start_date, end_date, status, vehicle_type_ids, package_ids, color_theme } = req.body;
+        const file = req.file;
+
+        if (typeof vehicle_type_ids === 'string') vehicle_type_ids = JSON.parse(vehicle_type_ids);
+        if (typeof package_ids === 'string') package_ids = JSON.parse(package_ids);
+
+        const updateData = {
+            name,
+            discount_type,
+            value: parseFloat(value),
+            is_first_time_user: is_first_time_user === 'true' || is_first_time_user === true,
+            min_bulk_ads: parseInt(min_bulk_ads) || 0,
+            start_date: start_date && start_date !== "" ? start_date : null,
+            end_date: end_date && end_date !== "" ? end_date : null,
+            status,
+            color_theme
+        };
+
+        if (file) {
+            try {
+                const { uploadFileToS3 } = await import('../utils/s3Service.js');
+                const imageUrl = await uploadFileToS3(file.buffer, file.originalname, file.mimetype, 'discounts');
+                updateData.offer_image_url = imageUrl;
+            } catch (err) {
+                console.error("S3 Upload Error for Discount Update:", err);
+            }
+        }
 
         const { error: discountError } = await supabase
             .from('discounts')
-            .update({
-                name,
-                discount_type,
-                value: parseFloat(value),
-                is_first_time_user,
-                min_bulk_ads: parseInt(min_bulk_ads) || 0,
-                start_date: start_date && start_date !== "" ? start_date : null,
-                end_date: end_date && end_date !== "" ? end_date : null,
-                status
-            })
+            .update(updateData)
             .eq('id', id);
 
         if (discountError) {

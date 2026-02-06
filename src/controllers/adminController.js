@@ -1,12 +1,11 @@
-import { createClient } from '@supabase/supabase-js';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import dotenv from 'dotenv';
+import supabase from '../config/supabase.js';
 
 dotenv.config();
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your_super_secret_key_change_this';
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
 // Admin Signup (Initial Seeding or Super Admin only in future)
 export const signupAdmin = async (req, res) => {
@@ -131,3 +130,50 @@ export const getDashboardStats = async (req, res) => {
         res.status(500).json({ message: 'Error fetching stats', error: error.message });
     }
 };
+
+// Get All Users with Ad Statistics
+export const getAllUsersWithStats = async (req, res) => {
+    try {
+        // 1. Fetch all users
+        const { data: users, error: userError } = await supabase
+            .from('users')
+            .select('id, name, email, phone, role, created_at')
+            .order('created_at', { ascending: false });
+
+        if (userError) throw userError;
+
+        // 2. Fetch all ads to calculate stats per user
+        // Note: For very large datasets, this might need optimization using RPC/SQL aggregates
+        const { data: ads, error: adsError } = await supabase
+            .from('CarAd')
+            .select('seller_id, status');
+
+        if (adsError) throw adsError;
+
+        // 3. Aggregate stats
+        const statsMap = {};
+        ads.forEach(ad => {
+            if (!ad.seller_id) return;
+            if (!statsMap[ad.seller_id]) {
+                statsMap[ad.seller_id] = { posted: 0, drafted: 0 };
+            }
+            if (ad.status === 'ACTIVE') statsMap[ad.seller_id].posted++;
+            else if (ad.status === 'DRAFT') statsMap[ad.seller_id].drafted++;
+        });
+
+        // 4. Merge stats into user objects
+        const usersWithStats = users.map(user => ({
+            ...user,
+            stats: statsMap[user.id] || { posted: 0, drafted: 0 }
+        }));
+
+        res.json({
+            success: true,
+            data: usersWithStats
+        });
+    } catch (error) {
+        console.error('Error in getAllUsersWithStats:', error);
+        res.status(500).json({ success: false, message: 'Server error fetching users', error: error.message });
+    }
+};
+
