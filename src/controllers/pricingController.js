@@ -102,7 +102,7 @@ export const createPricingRule = async (req, res) => {
 
         const { data, error } = await supabase
             .from('pricing_rules')
-            .insert([{ price_item_id, vehicle_type_id, price, unit, free_image_count, description_limit: description_limit || 500, extra_letter_price: extra_letter_price || 0, min_qty, max_qty, created_by_admin }])
+            .insert([{ price_item_id, vehicle_type_id, price, unit, free_image_count, description_limit: description_limit || 500, min_qty, max_qty, created_by_admin }])
             .select()
             .single();
 
@@ -386,6 +386,192 @@ export const getPublicPackages = async (req, res) => {
 
         res.json(enrichedPackages);
     } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+};
+
+// --- User Active Package & Usage ---
+
+export const getUserActivePackage = async (req, res) => {
+    try {
+        const userId = req.user?.id;
+        if (!userId) return res.status(401).json({ error: "Unauthorized" });
+
+        // 1. Get user's ACTIVE subscription
+        const now = new Date().toISOString();
+        const { data: subscription, error: subError } = await supabase
+            .from('user_subscriptions')
+            .select(`
+                *,
+                price_items!user_subscriptions_package_id_fkey (id, name, code, description)
+            `)
+            .eq('user_id', userId)
+            .eq('status', 'ACTIVE')
+            .lte('start_date', now)
+            .gte('end_date', now)
+            .order('end_date', { ascending: false })
+            .limit(1)
+            .single();
+
+        if (subError && subError.code !== 'PGRST116') throw subError; // PGRST116 is "no rows found"
+
+        if (!subscription) {
+            return res.json({ hasForcedPackage: false, package: null });
+        }
+
+        const packageId = subscription.package_id;
+
+        // 2. Get Package Config (Ad Limits & Included Items)
+        const { data: adLimits, error: infoError } = await supabase
+            .from('package_ad_limits')
+            .select('*, vehicle_types(type_name)')
+            .eq('package_id', packageId);
+
+        if (infoError) throw infoError;
+
+        const { data: includedItems, error: itemsError } = await supabase
+            .from('package_included_items')
+            .select('*, price_items!package_included_items_included_item_id_fkey(code, name)')
+            .eq('package_id', packageId);
+
+        if (itemsError) throw itemsError;
+
+        // 3. Calculate USAGE based on tracking records in 'payments' table
+        // We look for 'V-[TypeName]' codes in the order_id, which we use to avoid UUID truncation issues.
+        const { data: usageHistory, error: hError } = await supabase
+            .from('payments')
+            .select('order_id')
+            .eq('user_id', userId)
+            .eq('package_id', subscription.package_id)
+            .eq('status', 'SUCCESS')
+            .gte('created_at', subscription.start_date);
+
+        if (hError) throw hError;
+
+        // Fetch all vehicle types to map names back to IDs
+        const { data: vTypes, error: vError } = await supabase
+            .from('vehicle_types')
+            .select('id, type_name');
+
+        if (vError) throw vError;
+
+        const typeMap = {};
+        vTypes.forEach(t => {
+            typeMap[t.type_name.toLowerCase()] = t.id;
+        });
+
+        const usageMap = {};
+        usageHistory.forEach(h => {
+            if (h.order_id && h.order_id.startsWith('V-')) {
+                const typeName = h.order_id.replace('V-', '').toLowerCase();
+                const vId = typeMap[typeName];
+                if (vId) {
+                    if (!usageMap[vId]) usageMap[vId] = 0;
+                    usageMap[vId]++;
+                }
+            } else if (h.order_id && h.order_id.startsWith('INV-')) {
+                // OPTIONAL: Fallback for old records if they still exist and are NOT truncated
+                // But since we know they are truncated, let's just ignore them or add a comment.
+            }
+        });
+
+        // 4. Merge Limits vs Usage
+        const finalLimits = adLimits.map(limit => {
+            const used = usageMap[limit.vehicle_type_id] || 0;
+            const remaining = limit.is_unlimited ? 9999 : Math.max(0, limit.quantity - used);
+            return {
+                ...limit,
+                used_count: used,
+                remaining_count: remaining
+            };
+        });
+
+        // 5. Check Included Items for Global Limits (Image / Description)
+        // Look for price_items code 'IMG' (Images) or 'LTR' (Letters/Description) mapped via included_items
+        // Or assume they might be stored as Features. 
+        // The user says "Included Items" has "Image Limit" inside it.
+
+        let imageLimit = 5; // Default
+        let descriptionLimit = 500; // Default
+
+        // Check for specific item codes in included items
+        // Assuming item with code 'EXTRA_IMG' or similar defines the limit?
+        // Actually, usually "Included Items" are just "Free 5 Images". 
+        // Let's look for items with type 'LIMIT_MODIFIER' or similar, OR just specific known codes.
+
+        // Strategy: Look for items with code 'IMG_LIMIT' or 'DESC_LIMIT' if they exist, 
+        // or check quantities of 'IMG' items. 
+        // Based on previous context, we might rely on the `pricing_rules` mostly, 
+        // BUT if the package overrides it, we need to know.
+        // Let's return the raw included items to frontend to parse for now, 
+        // or try to find a 'feature' for it if config exists.
+
+        const { data: features, error: featError } = await supabase
+            .from('package_features')
+            .select('*')
+            .eq('price_item_id', packageId);
+
+        if (featError) throw featError;
+
+        // FETCH PACKAGE PRICING RULE (for limits)
+        const { data: pricingRules, error: ruleError } = await supabase
+            .from('pricing_rules')
+            .select('*')
+            .eq('price_item_id', packageId);
+
+        // We might want to pass these rules to frontend so it can see "free_image_count" directly from the package definition
+        // instead of relying on frontend to fetch ALL rules and find it.
+
+        const config = {};
+        features.forEach(f => config[f.feature_key] = f.feature_value);
+
+        res.json({
+            success: true,
+            data: {
+                hasForcedPackage: true,
+                subscriptionId: subscription.id,
+                packageId: subscription.package_id,
+                subscription: subscription,
+                package: subscription.price_items,
+                limits: finalLimits,
+                includedItems: includedItems,
+                packageRules: pricingRules || [],
+                config: config
+            }
+        });
+
+    } catch (error) {
+        console.error("Error fetching active package:", error);
+        res.status(500).json({ error: error.message });
+    }
+};
+
+export const unsubscribeUserPackage = async (req, res) => {
+    try {
+        const userId = req.user?.id;
+        const { packageId } = req.body;
+
+        if (!userId) return res.status(401).json({ error: "Unauthorized" });
+        if (!packageId) return res.status(400).json({ error: "Package ID is required" });
+
+        // Update the subscription status to CANCELLED
+        const { data, error } = await supabase
+            .from('user_subscriptions')
+            .update({ status: 'CANCELLED' })
+            .eq('user_id', userId)
+            .eq('package_id', packageId)
+            .eq('status', 'ACTIVE') // Ensure we only cancel active ones
+            .select();
+
+        if (error) throw error;
+
+        if (data.length === 0) {
+            return res.status(404).json({ error: "No active subscription found for this package." });
+        }
+
+        res.json({ message: "Subscription cancelled successfully", data });
+    } catch (error) {
+        console.error("Error cancelling subscription:", error);
         res.status(500).json({ error: error.message });
     }
 };
