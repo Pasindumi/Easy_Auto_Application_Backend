@@ -41,12 +41,12 @@ const mapClerkProviderToAuthProvider = (clerkUser) => {
     // Check for external accounts in the Clerk user object
     if (clerkUser.external_accounts && clerkUser.external_accounts.length > 0) {
         const provider = clerkUser.external_accounts[0].provider;
-        
+
         if (provider.includes('google')) return 'google';
         if (provider.includes('apple')) return 'apple';
         if (provider.includes('facebook')) return 'facebook';
     }
-    
+
     // Default to 'clerk' if we can't determine specific provider
     return 'clerk';
 };
@@ -100,7 +100,7 @@ const sanitizeUser = (user) => {
 export const clerkAuth = async (req, res) => {
     try {
         console.log('=== Clerk Auth Request ===');
-        
+
         // Extract token from Authorization header
         const authHeader = req.headers.authorization;
         const token = authHeader?.split(' ')[1];
@@ -136,7 +136,7 @@ export const clerkAuth = async (req, res) => {
             console.log('Clerk User ID:', payload.sub);
         } catch (clerkError) {
             console.error('❌ Clerk verification error:', clerkError.message);
-            
+
             let errorMessage = 'Failed to verify authentication token';
             if (clerkError.message?.includes('expired')) {
                 errorMessage = 'Authentication session expired. Please sign in again.';
@@ -176,7 +176,7 @@ export const clerkAuth = async (req, res) => {
         try {
             const fullClerkUser = await clerkService.getUser(clerkUserId);
             authProvider = mapClerkProviderToAuthProvider(fullClerkUser);
-        } catch {}
+        } catch { }
 
         // Account lookup and upsert logic
         let user = null;
@@ -192,7 +192,7 @@ export const clerkAuth = async (req, res) => {
         if (clerkMatch) {
             console.log('✅ Found existing user by clerk_user_id:', clerkMatch.id);
             user = clerkMatch;
-            
+
             // Update last_login
             try {
                 await supabase
@@ -223,7 +223,7 @@ export const clerkAuth = async (req, res) => {
             if (emailMatch) {
                 console.log('✅ Found existing user by email:', emailMatch.id);
                 console.log('📝 Existing auth_provider:', emailMatch.auth_provider);
-                
+
                 // MERGE: Update existing user with clerk_user_id
                 console.log('🔄 Merging Clerk login with existing account...');
                 const { data: updatedUser, error: updateError } = await supabase
@@ -291,6 +291,9 @@ export const clerkAuth = async (req, res) => {
             });
         }
 
+        // Generate backend JWT tokens
+        console.log('🔑 Generating JWT tokens...');
+
         // Ensure user was found or created
         if (!user || !user.id) {
             console.error('❌ User not found or created');
@@ -301,8 +304,36 @@ export const clerkAuth = async (req, res) => {
             });
         }
 
-        // Generate backend JWT tokens
-        console.log('🔑 Generating JWT tokens...');
+        // Check for BLOCKED or BANNED status
+        if (user.status === 'BLOCKED') {
+            return res.status(403).json({
+                success: false,
+                error: 'Your account has been permanently blocked by an administrator.',
+                code: 'USER_BLOCKED'
+            });
+        }
+
+        if (user.status === 'BANNED') {
+            const now = new Date();
+            const expiresAt = new Date(user.ban_expires_at);
+
+            if (expiresAt > now) {
+                return res.status(403).json({
+                    success: false,
+                    error: `Your account is temporarily banned until ${expiresAt.toLocaleString()}. Reason: ${user.ban_reason}`,
+                    code: 'USER_BANNED',
+                    ban_expires_at: user.ban_expires_at,
+                    ban_reason: user.ban_reason
+                });
+            } else {
+                // Ban expired, set status back to ACTIVE
+                await supabase
+                    .from('users')
+                    .update({ status: 'ACTIVE', ban_expires_at: null, ban_reason: null })
+                    .eq('id', user.id);
+                user.status = 'ACTIVE';
+            }
+        }
         const tokens = await jwtService.generateTokenPair(user);
         console.log('✅ JWT tokens generated successfully');
 
@@ -491,36 +522,36 @@ export const signup = async (req, res) => {
 
         // Validate required fields
         if (!name || !email || !password) {
-            return res.status(400).json({ 
-                error: 'Name, email, and password are required' 
+            return res.status(400).json({
+                error: 'Name, email, and password are required'
             });
         }
 
         // Validate name
         if (name.trim().length < 2) {
-            return res.status(400).json({ 
-                error: 'Name must be at least 2 characters long' 
+            return res.status(400).json({
+                error: 'Name must be at least 2 characters long'
             });
         }
 
         // Validate email format
         if (!isValidEmail(email)) {
-            return res.status(400).json({ 
-                error: 'Invalid email format. Email must contain "@"' 
+            return res.status(400).json({
+                error: 'Invalid email format. Email must contain "@"'
             });
         }
 
         // Validate password strength
         if (!isValidPassword(password)) {
-            return res.status(400).json({ 
-                error: 'Password must be at least 6 characters long' 
+            return res.status(400).json({
+                error: 'Password must be at least 6 characters long'
             });
         }
 
         // Validate phone if provided
         if (phone && !isValidPhone(phone)) {
-            return res.status(400).json({ 
-                error: 'Invalid phone number. Must contain at least 10 digits' 
+            return res.status(400).json({
+                error: 'Invalid phone number. Must contain at least 10 digits'
             });
         }
 
@@ -532,8 +563,8 @@ export const signup = async (req, res) => {
             .single();
 
         if (existingUser) {
-            return res.status(400).json({ 
-                error: 'User with this email already exists' 
+            return res.status(400).json({
+                error: 'User with this email already exists'
             });
         }
 
@@ -560,14 +591,14 @@ export const signup = async (req, res) => {
 
         if (createError) {
             console.error('Database error during signup:', createError);
-            
+
             // Check for specific DB errors
             if (createError.code === '23505') { // Unique constraint violation
-                return res.status(400).json({ 
-                    error: 'User with this email already exists' 
+                return res.status(400).json({
+                    error: 'User with this email already exists'
                 });
             }
-            
+
             throw createError;
         }
 
@@ -604,10 +635,10 @@ export const signup = async (req, res) => {
 
     } catch (error) {
         console.error('❌ Signup Error:', error);
-        
+
         // Don't leak internal error details to client
-        res.status(500).json({ 
-            error: 'Server error during signup. Please try again later.' 
+        res.status(500).json({
+            error: 'Server error during signup. Please try again later.'
         });
     }
 };
@@ -623,15 +654,15 @@ export const login = async (req, res) => {
 
         // Validate required fields
         if (!email || !password) {
-            return res.status(400).json({ 
-                error: 'Email and password are required' 
+            return res.status(400).json({
+                error: 'Email and password are required'
             });
         }
 
         // Validate email format
         if (!isValidEmail(email)) {
-            return res.status(400).json({ 
-                error: 'Invalid email format' 
+            return res.status(400).json({
+                error: 'Invalid email format'
             });
         }
 
@@ -652,7 +683,7 @@ export const login = async (req, res) => {
         // CRITICAL: Check if user registered with password auth
         // Users with social-only accounts (google/apple/facebook/clerk) cannot login with password
         if (user.auth_provider !== 'password') {
-            return res.status(401).json({ 
+            return res.status(401).json({
                 error: `This account uses ${user.auth_provider} login. Please sign in with your ${user.auth_provider} account.`,
                 code: 'SOCIAL_LOGIN_REQUIRED',
                 provider: user.auth_provider
@@ -662,8 +693,8 @@ export const login = async (req, res) => {
         // Check if user has a password (should always exist for auth_provider='password')
         if (!user.password) {
             console.error('❌ Data inconsistency: auth_provider=password but no password hash found');
-            return res.status(401).json({ 
-                error: 'Account data error. Please contact support.' 
+            return res.status(401).json({
+                error: 'Account data error. Please contact support.'
             });
         }
 
@@ -683,6 +714,37 @@ export const login = async (req, res) => {
                 .eq('id', user.id);
         } catch (err) {
             console.warn('Failed to update last_login:', err);
+        }
+
+        // Check for BLOCKED or BANNED status
+        if (user.status === 'BLOCKED') {
+            return res.status(403).json({
+                success: false,
+                error: 'Your account has been permanently blocked by an administrator.',
+                code: 'USER_BLOCKED'
+            });
+        }
+
+        if (user.status === 'BANNED') {
+            const now = new Date();
+            const expiresAt = new Date(user.ban_expires_at);
+
+            if (expiresAt > now) {
+                return res.status(403).json({
+                    success: false,
+                    error: `Your account is temporarily banned until ${expiresAt.toLocaleString()}. Reason: ${user.ban_reason}`,
+                    code: 'USER_BANNED',
+                    ban_expires_at: user.ban_expires_at,
+                    ban_reason: user.ban_reason
+                });
+            } else {
+                // Ban expired, set status back to ACTIVE
+                await supabase
+                    .from('users')
+                    .update({ status: 'ACTIVE', ban_expires_at: null, ban_reason: null })
+                    .eq('id', user.id);
+                user.status = 'ACTIVE';
+            }
         }
 
         // Generate backend JWT access and refresh tokens
@@ -712,10 +774,10 @@ export const login = async (req, res) => {
 
     } catch (error) {
         console.error('❌ Login Error:', error);
-        
+
         // Don't leak internal error details to client
-        res.status(500).json({ 
-            error: 'Server error during login. Please try again later.' 
+        res.status(500).json({
+            error: 'Server error during login. Please try again later.'
         });
     }
 };
@@ -737,30 +799,30 @@ const generateOTP = () => {
  */
 const formatPhoneToE164 = (phone) => {
     if (!phone) return null;
-    
+
     // Remove all non-digit characters
     let cleaned = phone.replace(/\D/g, '');
-    
+
     // If already has country code (94), add + prefix
     if (cleaned.startsWith('94') && cleaned.length === 11) {
         return '+' + cleaned;
     }
-    
+
     // If starts with 0, remove it and add +94
     if (cleaned.startsWith('0') && cleaned.length === 10) {
         return '+94' + cleaned.substring(1);
     }
-    
+
     // If 9 digits (without leading 0), add +94
     if (cleaned.length === 9) {
         return '+94' + cleaned;
     }
-    
+
     // Return as-is if already in correct format
     if (phone.startsWith('+')) {
         return phone;
     }
-    
+
     // Default: assume it needs +94
     return '+94' + cleaned;
 };
@@ -774,7 +836,7 @@ const sendOTPviaSMS = async (phone, otp) => {
     console.log('⚠️ SMS OTP disabled (Twilio number not purchased)');
     console.log(`   Would send to: ${phone}, OTP: ${otp}`);
     return false;
-    
+
     /* 🔒 Uncomment when Twilio number is ready
     try {
         const client = getTwilioClient();
@@ -814,11 +876,11 @@ export const forgotPassword = async (req, res) => {
 
         // Determine if input is email or phone
         const isEmail = emailOrPhone.includes('@');
-        
+
         // For phone: normalize to match DB format (without country code)
         let searchValue;
         let searchField;
-        
+
         if (isEmail) {
             searchField = 'email';
             searchValue = emailOrPhone.toLowerCase().trim();
@@ -868,7 +930,7 @@ export const forgotPassword = async (req, res) => {
         // ⚠️ TEMPORARY: SMS disabled until Twilio number is purchased
         // Send OTP via EMAIL ONLY for now
         let sendSuccess = false;
-        
+
         if (!user.email) {
             // If user has no email, we can't send OTP (SMS disabled)
             otpCache.del(user.id);
@@ -876,10 +938,10 @@ export const forgotPassword = async (req, res) => {
                 error: 'SMS OTP is temporarily unavailable. Please use email for password reset.'
             });
         }
-        
+
         // Send OTP via email using Resend
         const emailResult = await sendOtpEmail(user.email, otp);
-        
+
         if (!emailResult.success) {
             // Clean up cache if sending failed
             otpCache.del(user.id);
@@ -888,9 +950,9 @@ export const forgotPassword = async (req, res) => {
                 error: 'Failed to send OTP email. Please try again later.'
             });
         }
-        
+
         console.log(`📧 OTP sent to email: ${user.email}`);
-        
+
         /* 🔒 SMS TEMPORARILY DISABLED - Uncomment when Twilio number is ready
         if (isEmail) {
             const emailResult = await sendOtpEmail(user.email, otp);
@@ -994,7 +1056,7 @@ export const resetPassword = async (req, res) => {
 
         // Normalize identifier (case-insensitive for email)
         const isEmail = identifier.includes('@');
-        const normalizedIdentifier = isEmail 
+        const normalizedIdentifier = isEmail
             ? identifier.toLowerCase().trim()
             : identifier.trim();
 
@@ -1051,14 +1113,14 @@ export const resetPassword = async (req, res) => {
 
         if (updateError) {
             console.error('❌ Password update error:', updateError);
-            
+
             // Check for RLS blocking
             if (updateError.code === 'PGRST301' || updateError.message?.includes('RLS')) {
                 return res.status(403).json({
                     error: 'Update blocked by RLS. Service role key required.'
                 });
             }
-            
+
             return res.status(500).json({
                 error: 'Failed to update password'
             });
@@ -1074,7 +1136,7 @@ export const resetPassword = async (req, res) => {
         // Clear OTP from cache after successful update
         otpCache.del(user.id);
         otpCache.del(`${user.id}_verified`);
-        
+
         console.log(`✅ Password updated successfully for user: ${user.id}`);
 
         res.status(200).json({

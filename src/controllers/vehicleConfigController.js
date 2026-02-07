@@ -19,13 +19,14 @@ export const getVehicleTypes = async (req, res) => {
 };
 
 export const createVehicleType = async (req, res) => {
-    const { type_name } = req.body;
+    const { type_name, expiry_days } = req.body;
     const adminId = req.user.id;
 
     try {
         const { data, error } = await supabase
             .from('vehicle_types')
-            .insert([{ type_name, created_by_admin: adminId }])
+            .insert([{ type_name, expiry_days: expiry_days || 30, created_by_admin: adminId }])
+
             .select()
             .single();
 
@@ -57,7 +58,33 @@ export const updateVehicleTypeStatus = async (req, res) => {
     }
 };
 
+export const updateVehicleType = async (req, res) => {
+    const { id } = req.params;
+    const { type_name, expiry_days, status } = req.body;
+
+    try {
+        const updateData = {};
+        if (type_name) updateData.type_name = type_name;
+        if (expiry_days !== undefined) updateData.expiry_days = expiry_days;
+        if (status) updateData.status = status;
+
+        const { data, error } = await supabase
+            .from('vehicle_types')
+            .update(updateData)
+            .eq('id', id)
+            .select()
+            .single();
+
+        if (error) throw error;
+        res.json(data);
+    } catch (error) {
+        console.error('Vehicle Config Error:', error);
+        res.status(500).json({ message: error.message });
+    }
+};
+
 // --- Vehicle Attributes ---
+
 
 export const getAttributesByType = async (req, res) => {
     const { typeId } = req.params;

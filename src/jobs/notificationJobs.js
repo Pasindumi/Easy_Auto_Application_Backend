@@ -20,8 +20,10 @@ export const initializeNotificationJobs = () => {
     console.log('Initializing Notification Jobs...');
     console.log(`- Expiry Check scheduled for ${EXPIRY_CHECK_TIME}`);
     console.log(`- Ad Limit Check scheduled for ${AD_LIMIT_CHECK_TIME}`);
+    console.log('- Ad Expiry Check scheduled for 00:00 daily');
 
     // Schedule Expiry Warning
+
     cron.schedule(`${expiryMinute} ${expiryHour} * * *`, async () => {
         console.log('Running Expiry Warning Job...');
         await checkExpiringPackages();
@@ -32,7 +34,14 @@ export const initializeNotificationJobs = () => {
         console.log('Running Ad Limit Job...');
         await checkAdLimitUsage();
     });
+
+    // Schedule Ad Expiry Check (Daily at midnight)
+    cron.schedule('0 0 * * *', async () => {
+        console.log('Running Ad Expiry Check Job...');
+        await checkExpiredAds();
+    });
 };
+
 
 export const checkExpiringPackages = async () => {
     try {
@@ -92,3 +101,19 @@ export const checkAdLimitUsage = async () => {
         console.error('Error in checkAdLimitUsage:', error);
     }
 };
+
+export const checkExpiredAds = async () => {
+    try {
+        const { data, error } = await supabase
+            .from('CarAd')
+            .update({ status: 'EXPIRED' })
+            .eq('status', 'ACTIVE')
+            .lt('expiry_date', new Date().toISOString());
+
+        if (error) throw error;
+        console.log(`Successfully expired ${data?.length || 0} ads.`);
+    } catch (error) {
+        console.error('Error in checkExpiredAds:', error);
+    }
+};
+

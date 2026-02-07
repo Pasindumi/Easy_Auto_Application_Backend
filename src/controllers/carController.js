@@ -45,6 +45,17 @@ export const createAd = async (req, res) => {
 
     // Mapped fields
     try {
+        // Fetch vehicle type info to get expiry_days
+        const { data: vTypeData } = await supabase
+            .from('vehicle_types')
+            .select('expiry_days')
+            .eq('id', safeVehicleTypeId)
+            .single();
+
+        const expiryDays = vTypeData?.expiry_days || 30;
+        const expiryDate = new Date();
+        expiryDate.setDate(expiryDate.getDate() + expiryDays);
+
         // 1. Create CarAd record
         const { data: adData, error: adError } = await supabase
             .from("CarAd")
@@ -57,9 +68,10 @@ export const createAd = async (req, res) => {
                     location,
                     description,
                     status: "DRAFT", // Default to DRAFT or PENDING_APPROVAL
-                    expiry_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days expiry
+                    expiry_date: expiryDate,
                 },
             ])
+
             .select()
             .single();
 
@@ -337,7 +349,7 @@ export const updateAd = async (req, res) => {
 
 // Get all ads (Public)
 export const getAds = async (req, res) => {
-    const { page, limit, brand, model, minPrice, maxPrice, vehicleTypeId, location, search } = req.query;
+    const { page, limit, brand, model, minPrice, maxPrice, vehicleTypeId, location, search, isHomepageBanner, isPopupPromotion } = req.query;
     const pageInt = parseInt(page) || 1;
     const limitInt = parseInt(limit) || 10;
     const start = (pageInt - 1) * limitInt;
@@ -365,19 +377,45 @@ export const getAds = async (req, res) => {
 
         if (search) {
             // Complex search: title OR brand OR model
-            // Supabase doesn't support complex OR across joined tables easily in a single string,
-            // but we can use .or() with filters if they were on the same table.
-            // Since brand/model are in CarDetails, we'll try title match or relies on frontend if too complex.
-            // But let's try a basic title search for now.
             queryBuilder = queryBuilder.ilike('title', `%${search}%`);
         }
 
-        // Apply pagination
-        queryBuilder = queryBuilder.range(start, end).order('created_at', { ascending: false });
+        if (isHomepageBanner === 'true') {
+            queryBuilder = queryBuilder.eq('is_homepage_banner', true);
+        }
+
+        if (isPopupPromotion === 'true') {
+            queryBuilder = queryBuilder.eq('is_popup_promotion', true);
+        }
+
+        // Apply pagination and boost sorting
+        queryBuilder = queryBuilder
+            .range(start, end)
+            .order('is_featured', { ascending: false })
+            .order('created_at', { ascending: false });
 
         const { data, count, error } = await queryBuilder;
 
-        if (error) throw error;
+        if (error) {
+            // Definitive check for range/bounds issues
+            const isRangeError = error.code === 'PGRST103' ||
+                (error.message && typeof error.message === 'string' && error.message.includes('out of bounds'));
+
+            if (isRangeError) {
+                return res.status(200).json({
+                    success: true,
+                    data: [],
+                    pagination: {
+                        total: count || 0,
+                        page: pageInt,
+                        pages: Math.ceil((count || 0) / limitInt) || 0,
+                    },
+                    message: "No results for the requested range"
+                });
+            }
+
+            throw error;
+        }
 
         res.json({
             success: true,
@@ -389,24 +427,39 @@ export const getAds = async (req, res) => {
             },
         });
     } catch (error) {
-        console.error("Error fetching ads:", error);
-        let errorMessage = error.message || "Unknown error occurred";
+        console.error("AD FETCH ERROR:", error);
 
-        // Check if message is a JSON string (Supabase sometimes does this)
-        if (typeof errorMessage === 'string' && errorMessage.startsWith('{')) {
+        let errorMessage = "Unknown database error";
+        if (error) {
+            if (typeof error === 'string') errorMessage = error;
+            else if (error.message) errorMessage = error.message;
+        }
+
+        // Handle Supabase error object strings
+        if (typeof errorMessage === 'string' && errorMessage.trim().startsWith('{')) {
             try {
                 const parsed = JSON.parse(errorMessage);
                 errorMessage = parsed.message || parsed.error || errorMessage;
             } catch (e) {
-                // ignore
+                // Not valid JSON
             }
+        }
+
+        // Final fallback for missing range error handling in older clients
+        if (errorMessage.includes('out of bounds') || errorMessage === '{"') {
+            return res.status(200).json({
+                success: true,
+                data: [],
+                pagination: { total: 0, page: pageInt, pages: 0 },
+                message: "Range error handled in catch"
+            });
         }
 
         res.status(500).json({
             success: false,
-            message: "DEBUG: " + (error.code || "NO_CODE") + " - " + (typeof error.message) + " - " + error.message,
-            code: error.code || 'UNKNOWN',
-            details: error.details || error.hint
+            message: errorMessage,
+            error: error.code || 'DATABASE_ERROR',
+            details: error.details || error.hint || null
         });
     }
 };
@@ -427,9 +480,17 @@ export const getAdById = async (req, res) => {
             attribute_id,
             value,
             attribute:vehicle_attributes(attribute_name, unit, data_type)
+        ),
+        active_boosts:ad_boosts(
+            id,
+            start_date,
+            end_date,
+            status,
+            package:price_items(name)
         )
       `)
             .eq("id", id)
+            .eq("active_boosts.status", "ACTIVE")
             .single();
 
         if (adError) throw adError;
@@ -437,6 +498,12 @@ export const getAdById = async (req, res) => {
         if (!adData) {
             return res.status(404).json({ success: false, message: "Ad not found" });
         }
+
+        // Filter active_boosts to only include currently active ones (since eq filter on relationship might not be enough depending on Supabase version/config)
+        const now = new Date();
+        const currentBoosts = (adData.active_boosts || []).filter((b) =>
+            b.status === 'ACTIVE' && new Date(b.end_date) > now
+        );
 
         // --- Manual Fix for Missing Attribute Relations ---
         if (adData.attributes && adData.attributes.length > 0) {
@@ -492,7 +559,8 @@ export const getAdById = async (req, res) => {
 
         const responseData = {
             ...adData,
-            users: sellerDetails
+            users: sellerDetails,
+            active_boosts: currentBoosts
         };
 
         res.json({ success: true, data: responseData });
@@ -601,6 +669,13 @@ export const adminGetAds = async (req, res) => {
                     attribute_id,
                     value,
                     attribute:vehicle_attributes(attribute_name, unit, data_type)
+                ),
+                active_boosts:ad_boosts(
+                    id,
+                    start_date,
+                    end_date,
+                    status,
+                    package:price_items(name)
                 )
             `, { count: 'exact' })
             .range(start, end)
@@ -618,10 +693,16 @@ export const adminGetAds = async (req, res) => {
 
         if (error) throw error;
 
-        // --- Manual Fix for Missing Attribute Relations ---
+        // --- Post-processing: Filter Active Boosts and Manual Fix for Missing Attribute Relations ---
+        const now = new Date();
         if (data && data.length > 0) {
             let missingAttrIds = [];
             data.forEach(ad => {
+                // Filter active_boosts to only include currently active ones
+                ad.active_boosts = (ad.active_boosts || []).filter(b =>
+                    b.status === 'ACTIVE' && new Date(b.end_date) > now
+                );
+
                 if (ad.attributes && ad.attributes.length > 0) {
                     ad.attributes.forEach(a => {
                         if (!a.attribute && a.attribute_id) {

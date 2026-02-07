@@ -137,7 +137,7 @@ export const getAllUsersWithStats = async (req, res) => {
         // 1. Fetch all users
         const { data: users, error: userError } = await supabase
             .from('users')
-            .select('id, name, email, phone, role, created_at')
+            .select('id, name, email, phone, role, status, ban_expires_at, ban_reason, created_at')
             .order('created_at', { ascending: false });
 
         if (userError) throw userError;
@@ -177,3 +177,82 @@ export const getAllUsersWithStats = async (req, res) => {
     }
 };
 
+// Ban a user
+export const banUser = async (req, res) => {
+    const { id } = req.params;
+    const { durationHours, reason } = req.body;
+
+    try {
+        if (!durationHours) {
+            return res.status(400).json({ success: false, message: 'Ban duration is required' });
+        }
+
+        const banExpiresAt = new Date();
+        banExpiresAt.setHours(banExpiresAt.getHours() + parseInt(durationHours));
+
+        const { data, error } = await supabase
+            .from('users')
+            .update({
+                status: 'BANNED',
+                ban_expires_at: banExpiresAt.toISOString(),
+                ban_reason: reason || 'Violation of community guidelines'
+            })
+            .eq('id', id)
+            .select()
+            .single();
+
+        if (error) throw error;
+
+        res.json({ success: true, message: `User banned successfully until ${banExpiresAt.toLocaleString()}`, data });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Error banning user', error: error.message });
+    }
+};
+
+// Block a user permanently
+export const blockUser = async (req, res) => {
+    const { id } = req.params;
+
+    try {
+        const { data, error } = await supabase
+            .from('users')
+            .update({
+                status: 'BLOCKED',
+                ban_expires_at: null,
+                ban_reason: 'Permanently blocked by admin'
+            })
+            .eq('id', id)
+            .select()
+            .single();
+
+        if (error) throw error;
+
+        res.json({ success: true, message: 'User blocked permanently', data });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Error blocking user', error: error.message });
+    }
+};
+
+// Unban or Unblock a user (Revoke)
+export const unbanUser = async (req, res) => {
+    const { id } = req.params;
+
+    try {
+        const { data, error } = await supabase
+            .from('users')
+            .update({
+                status: 'ACTIVE',
+                ban_expires_at: null,
+                ban_reason: null
+            })
+            .eq('id', id)
+            .select()
+            .single();
+
+        if (error) throw error;
+
+        res.json({ success: true, message: 'User status reset to ACTIVE', data });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Error resetting user status', error: error.message });
+    }
+};
