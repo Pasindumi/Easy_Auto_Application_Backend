@@ -28,7 +28,4 @@ router.post("/unsubscribe", protect, unsubscribeUser);
 // Route to activate free ad via package benefit
 router.post("/activate-free-ad", protect, activateFreeAdByPackage);
 
-// Route for PayHere Notification
-router.post("/notify", handlePaymentNotification);
-
 export default router;
