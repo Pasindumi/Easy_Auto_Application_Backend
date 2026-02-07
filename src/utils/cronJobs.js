@@ -25,6 +25,26 @@ const startCronJobs = () => {
             console.error("Cron Job Failed:", err);
         }
     });
+
+    // Run every hour to check for expired bans
+    cron.schedule("0 * * * *", async () => {
+        console.log("Running User Unban Job...");
+        try {
+            const { error } = await supabase
+                .from("users")
+                .update({ status: "ACTIVE", ban_expires_at: null, ban_reason: null })
+                .eq("status", "BANNED")
+                .lt("ban_expires_at", new Date().toISOString());
+
+            if (error) {
+                console.error("Error unbanning users:", error);
+            } else {
+                console.log("User Unban Job Completed.");
+            }
+        } catch (err) {
+            console.error("User Unban Cron Job Failed:", err);
+        }
+    });
 };
 
 export default startCronJobs;

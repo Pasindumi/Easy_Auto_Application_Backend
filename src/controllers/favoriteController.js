@@ -76,7 +76,7 @@ export const getFavorites = async (req, res) => {
                     ),
                     AdImage (
                         image_url,
-                        is_main
+                        is_primary
                     )
                 )
             `)

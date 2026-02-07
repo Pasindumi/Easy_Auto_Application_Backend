@@ -1,7 +1,8 @@
 import express from 'express';
 import {
-    getVehicleTypes, createVehicleType, updateVehicleTypeStatus,
+    getVehicleTypes, createVehicleType, updateVehicleType, updateVehicleTypeStatus,
     getAttributesByType, createAttribute, updateAttribute,
+
     getBrandsByType, createBrand, updateBrand,
     getModelsByType, createModel, getModelsByBrand,
     getConditionsByType, createCondition, deleteCondition
@@ -28,7 +29,9 @@ router.get('/conditions/:typeId', getConditionsByType);
 
 // Admin Routes (Write access)
 router.post('/types', protectAdmin, createVehicleType);
+router.put('/types/:id', protectAdmin, updateVehicleType);
 router.put('/types/:id/status', protectAdmin, updateVehicleTypeStatus);
+
 
 router.post('/attributes', protectAdmin, createAttribute);
 router.put('/attributes/:id', protectAdmin, updateAttribute);

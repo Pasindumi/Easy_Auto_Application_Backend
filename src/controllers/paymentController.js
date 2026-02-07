@@ -64,7 +64,8 @@ export const initiatePayment = async (req, res) => {
             address,
             city,
             country,
-            packageId // Optional
+            packageId, // Optional
+            adId // Optional (for Boosts)
         } = req.body;
 
         console.log("--- PayHere Server-Side Initiation ---");
@@ -79,6 +80,7 @@ export const initiatePayment = async (req, res) => {
         const { error: dbError } = await supabase.from('payments').insert({
             user_id: userId,
             package_id: packageId || null,
+            ad_id: adId || null,
             order_id: order_id,
             amount: amount,
             currency: currency || 'LKR',
@@ -299,44 +301,75 @@ export const handlePaymentNotify = async (req, res) => {
             const packageId = custom_2;
 
             if (userId && packageId) {
-                // Fetch Package Duration
-                const { data: featData } = await supabase
-                    .from('package_features')
-                    .select('feature_value')
-                    .eq('price_item_id', packageId)
-                    .eq('feature_key', 'DURATION_DAYS')
+                // Fetch Payment Record to check for ad_id and differentiate Boost vs Subscription
+                // We need ad_id to distinguish boost packages.
+                const { data: payRecord } = await supabase
+                    .from('payments')
+                    .select('id, ad_id, package_id, price_items(item_type)')
+                    .eq('order_id', order_id)
                     .single();
 
-                const durationDays = featData ? parseInt(featData.feature_value) : 30;
+                if (payRecord && payRecord.price_items?.item_type === 'BOOST_PACKAGE') {
+                    // It's a Boost!
+                    console.log(`Applying Boost Package ${packageId} to Ad ${payRecord.ad_id}`);
 
-                const startDate = new Date();
-                const endDate = new Date();
-                endDate.setDate(startDate.getDate() + (isNaN(durationDays) ? 30 : durationDays));
+                    // Fetch duration days from package features
+                    const { data: featData } = await supabase
+                        .from('package_features')
+                        .select('feature_value')
+                        .eq('price_item_id', packageId)
+                        .eq('feature_key', 'DURATION_DAYS')
+                        .single();
 
-                const { error: subError } = await supabase
-                    .from('user_subscriptions')
-                    .insert({
-                        user_id: userId,
-                        package_id: packageId,
-                        start_date: startDate.toISOString(),
-                        end_date: endDate.toISOString(),
-                        status: 'ACTIVE'
+                    const durationDays = featData ? parseInt(featData.feature_value) : 30;
+
+                    const { applyBoostToAd } = await import('./boostController.js');
+                    await applyBoostToAd({
+                        adId: payRecord.ad_id,
+                        packageId: packageId,
+                        paymentId: payRecord.id, // We need payment ID, but payRecord only has ad_id... Wait, order_id is unique enough or I can fetch ID too.
+                        // Actually payRecord above didn't select ID. Let's select ID.
+                        durationDays
                     });
 
-                if (subError) {
-                    console.error("Error creating subscription:", subError);
                 } else {
-                    console.log(`Package ${packageId} assigned to User ${userId} for ${durationDays} days`);
+                    // Regular Subscription Logic
+                    // Fetch Package Duration
+                    const { data: featData } = await supabase
+                        .from('package_features')
+                        .select('feature_value')
+                        .eq('price_item_id', packageId)
+                        .eq('feature_key', 'DURATION_DAYS')
+                        .single();
 
-                    // Send Email
-                    // payment_id from PayHere is the transaction ID, but our DB id is payment_id? 
-                    // Wait, handlePaymentNotify doesn't return the inserted payment row ID easily without querying.
-                    // But we updated the payment with 'order_id'.
-                    // Let's get the internal payment ID.
-                    const { data: payRow } = await supabase.from('payments').select('id').eq('order_id', order_id).single();
-                    if (payRow) {
-                        sendPackagePurchaseEmail(userId, packageId, payRow.id).catch(err => console.error("Email trigger error:", err));
+                    const durationDays = featData ? parseInt(featData.feature_value) : 30;
+
+                    const startDate = new Date();
+                    const endDate = new Date();
+                    endDate.setDate(startDate.getDate() + (isNaN(durationDays) ? 30 : durationDays));
+
+                    const { error: subError } = await supabase
+                        .from('user_subscriptions')
+                        .insert({
+                            user_id: userId,
+                            package_id: packageId,
+                            start_date: startDate.toISOString(),
+                            end_date: endDate.toISOString(),
+                            status: 'ACTIVE'
+                        });
+
+                    if (subError) {
+                        console.error("Error creating subscription:", subError);
+                    } else {
+                        console.log(`Package ${packageId} assigned to User ${userId} for ${durationDays} days`);
                     }
+                }
+
+                // Re-fetch payment ID for email if needed (or include in payRecord selection)
+                const { data: completePayment } = await supabase.from('payments').select('id').eq('order_id', order_id).single();
+
+                if (completePayment) {
+                    sendPackagePurchaseEmail(userId, packageId, completePayment.id).catch(err => console.error("Email trigger error:", err));
                 }
             }
         }
@@ -494,8 +527,9 @@ export const activateFreeAdByPackage = async (req, res) => {
                 vehicle_type_id, 
                 seller_id, 
                 status,
-                vehicle_types (type_name)
+                vehicle_types (type_name, expiry_days)
             `)
+
             .eq('id', adId)
             .single();
 
@@ -530,19 +564,24 @@ export const activateFreeAdByPackage = async (req, res) => {
                 .single();
 
             if (sub) {
-                // Count how many tracking records exist for this package in this period
+                const typeName = ad.vehicle_types?.type_name || 'Other';
+                const typeOrderIdPrefix = `V-${typeName}`;
+
+                // Count how many tracking records exist for this package and SPECIFIC vehicle type in this period
                 const { count } = await supabase
                     .from('payments')
                     .select('*', { count: 'exact', head: true })
                     .eq('user_id', userId)
                     .eq('package_id', packageId)
                     .eq('status', 'SUCCESS')
+                    .eq('order_id', typeOrderIdPrefix)
                     .gte('created_at', sub.start_date);
 
                 if (count >= limit.quantity) {
                     return res.status(400).json({ success: false, message: "Package ad posting limit reached for this vehicle type." });
                 }
             }
+
         }
 
         const typeName = ad.vehicle_types?.type_name || 'Other';
@@ -570,12 +609,17 @@ export const activateFreeAdByPackage = async (req, res) => {
         }
 
         // 3. Mark Ad as ACTIVE and set expiry
+        const expiryDays = ad.vehicle_types?.expiry_days || 30;
+        const expiryDate = new Date();
+        expiryDate.setDate(expiryDate.getDate() + expiryDays);
+
         const { error: updateError } = await supabase
             .from('CarAd')
             .update({
                 status: 'ACTIVE',
-                expiry_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+                expiry_date: expiryDate.toISOString(),
             })
+
             .eq('id', adId);
 
         if (updateError) {

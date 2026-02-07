@@ -12,6 +12,8 @@ import paymentRoutes from "./routes/paymentRoutes.js";
 import userRoutes from "./routes/userRoutes.js";
 import reportRoutes from "./routes/reportRoutes.js";
 import favoriteRoutes from "./routes/favoriteRoutes.js";
+import complaintRoutes from "./routes/complaintRoutes.js";
+import boostRoutes from "./routes/boostRoutes.js";
 import startCronJobs from "./utils/cronJobs.js";
 
 const app = express();
@@ -45,6 +47,8 @@ app.use("/api/payment", paymentRoutes); // Payment routes
 app.use("/api/users", userRoutes); // User routes
 app.use("/api/reports", reportRoutes); // Ad report routes
 app.use("/api/favorites", favoriteRoutes); // Favorite routes
+app.use("/api/complaints", complaintRoutes); // Complaints routes
+app.use("/api/boosts", boostRoutes); // Boost routes
 
 // Start Cron Jobs
 startCronJobs();
