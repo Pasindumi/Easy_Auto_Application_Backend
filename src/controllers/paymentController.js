@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import supabase from "../config/supabase.js";
+import { sendPackagePurchaseEmail } from "../services/emailService.js";
 
 /**
  * Generates the PayHere MD5 Hash for secure checkout.
@@ -226,6 +227,11 @@ export const mockPaymentSuccess = async (req, res) => {
             return res.status(500).json({ success: false, message: "Failed to create subscription." });
         }
 
+        // 4. Send Email Notification
+        // We don't await this to keep response fast, or we can await if critical.
+        // Better to fire and forget or wrap in try-catch to not block response.
+        sendPackagePurchaseEmail(userId, packageId, payData.id).catch(err => console.error("Email trigger error:", err));
+
         return res.json({ success: true, message: "Payment successful and package assigned." });
 
     } catch (error) {
@@ -321,6 +327,16 @@ export const handlePaymentNotify = async (req, res) => {
                     console.error("Error creating subscription:", subError);
                 } else {
                     console.log(`Package ${packageId} assigned to User ${userId} for ${durationDays} days`);
+
+                    // Send Email
+                    // payment_id from PayHere is the transaction ID, but our DB id is payment_id? 
+                    // Wait, handlePaymentNotify doesn't return the inserted payment row ID easily without querying.
+                    // But we updated the payment with 'order_id'.
+                    // Let's get the internal payment ID.
+                    const { data: payRow } = await supabase.from('payments').select('id').eq('order_id', order_id).single();
+                    if (payRow) {
+                        sendPackagePurchaseEmail(userId, packageId, payRow.id).catch(err => console.error("Email trigger error:", err));
+                    }
                 }
             }
         }
