@@ -226,3 +226,36 @@ alter table public."AdImage" enable row level security;
 
 drop policy if exists "Public view images" on public."AdImage";
 create policy "Public view images" on public."AdImage" for all using (true);
+
+-- Ad Reports Table
+create table if not exists public.ad_reports (
+  id uuid default uuid_generate_v4() primary key,
+  ad_id uuid references public."CarAd"(id) on delete cascade,
+  reporter_id uuid references public.users(id) on delete cascade,
+  reason text not null,
+  status text default 'PENDING' check (status in ('PENDING', 'REVIEWED', 'RESOLVED')),
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+alter table public.ad_reports enable row level security;
+
+drop policy if exists "Users can create reports" on public.ad_reports;
+create policy "Users can create reports" on public.ad_reports for insert with check (auth.uid() = reporter_id);
+
+drop policy if exists "Admins can view reports" on public.ad_reports;
+create policy "Admins can view reports" on public.ad_reports for select using (true);
+
+-- Wishlist Table
+create table if not exists public.wishlist (
+  id uuid default uuid_generate_v4() primary key,
+  user_id uuid references public.users(id) on delete cascade not null,
+  ad_id uuid references public."CarAd"(id) on delete cascade not null,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
+  unique(user_id, ad_id)
+);
+
+alter table public.wishlist enable row level security;
+
+drop policy if exists "Users can manage their own wishlist" on public.wishlist;
+create policy "Users can manage their own wishlist" on public.wishlist
+  for all using (auth.uid() = user_id);

@@ -337,7 +337,7 @@ export const updateAd = async (req, res) => {
 
 // Get all ads (Public)
 export const getAds = async (req, res) => {
-    const { page, limit, brand, model, minPrice, maxPrice, vehicleTypeId } = req.query;
+    const { page, limit, brand, model, minPrice, maxPrice, vehicleTypeId, location, search } = req.query;
     const pageInt = parseInt(page) || 1;
     const limitInt = parseInt(limit) || 10;
     const start = (pageInt - 1) * limitInt;
@@ -347,19 +347,33 @@ export const getAds = async (req, res) => {
         let queryBuilder = supabase
             .from("CarAd")
             .select(`
-            *
-        `, { count: 'exact' })
-            .eq("status", "ACTIVE")
-        // .range(start, end);
+                *,
+                CarDetails!inner(*),
+                AdImage(*)
+            `, { count: 'exact' })
+            .eq("status", "ACTIVE");
 
         if (minPrice) queryBuilder = queryBuilder.gte("price", minPrice);
         if (maxPrice) queryBuilder = queryBuilder.lte("price", maxPrice);
         if (vehicleTypeId) queryBuilder = queryBuilder.eq('vehicle_type_id', vehicleTypeId);
-
-        // For child filters (e.g. brand in CarDetails or vehicle_brands)
-        // If brand is passed and it's in CarDetails:
         if (brand) queryBuilder = queryBuilder.eq('CarDetails.brand', brand);
         if (model) queryBuilder = queryBuilder.eq('CarDetails.model', model);
+
+        if (location) {
+            queryBuilder = queryBuilder.ilike('location', `%${location}%`);
+        }
+
+        if (search) {
+            // Complex search: title OR brand OR model
+            // Supabase doesn't support complex OR across joined tables easily in a single string,
+            // but we can use .or() with filters if they were on the same table.
+            // Since brand/model are in CarDetails, we'll try title match or relies on frontend if too complex.
+            // But let's try a basic title search for now.
+            queryBuilder = queryBuilder.ilike('title', `%${search}%`);
+        }
+
+        // Apply pagination
+        queryBuilder = queryBuilder.range(start, end).order('created_at', { ascending: false });
 
         const { data, count, error } = await queryBuilder;
 
