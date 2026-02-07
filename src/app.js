@@ -11,6 +11,7 @@ import discountsRoutes from "./routes/discountsRoutes.js";
 import paymentRoutes from "./routes/paymentRoutes.js";
 import userRoutes from "./routes/userRoutes.js";
 import reportRoutes from "./routes/reportRoutes.js";
+import favoriteRoutes from "./routes/favoriteRoutes.js";
 import startCronJobs from "./utils/cronJobs.js";
 
 const app = express();
@@ -23,6 +24,7 @@ app.use(morgan("dev"));
 // This makes req.auth available on all routes
 app.use(
   clerkMiddleware({
+    publishableKey: process.env.CLERK_PUBLISHABLE_KEY,
     secretKey: process.env.CLERK_SECRET_KEY,
   })
 );
@@ -42,6 +44,7 @@ app.use("/api/discounts", discountsRoutes); // Discounts routes
 app.use("/api/payment", paymentRoutes); // Payment routes
 app.use("/api/users", userRoutes); // User routes
 app.use("/api/reports", reportRoutes); // Ad report routes
+app.use("/api/favorites", favoriteRoutes); // Favorite routes
 
 // Start Cron Jobs
 startCronJobs();
