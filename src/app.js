@@ -10,6 +10,7 @@ import pricingRoutes from "./routes/pricingRoutes.js";
 import discountsRoutes from "./routes/discountsRoutes.js";
 import paymentRoutes from "./routes/paymentRoutes.js";
 import userRoutes from "./routes/userRoutes.js";
+import reportRoutes from "./routes/reportRoutes.js";
 import startCronJobs from "./utils/cronJobs.js";
 
 const app = express();
@@ -40,6 +41,7 @@ app.use("/api/pricing", pricingRoutes); // Pricing routes
 app.use("/api/discounts", discountsRoutes); // Discounts routes
 app.use("/api/payment", paymentRoutes); // Payment routes
 app.use("/api/users", userRoutes); // User routes
+app.use("/api/reports", reportRoutes); // Ad report routes
 
 // Start Cron Jobs
 startCronJobs();
