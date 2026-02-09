@@ -14,6 +14,7 @@ import reportRoutes from "./routes/reportRoutes.js";
 import favoriteRoutes from "./routes/favoriteRoutes.js";
 import complaintRoutes from "./routes/complaintRoutes.js";
 import boostRoutes from "./routes/boostRoutes.js";
+import reviewRoutes from "./routes/reviewRoutes.js";
 import startCronJobs from "./utils/cronJobs.js";
 
 const app = express();
@@ -49,6 +50,7 @@ app.use("/api/reports", reportRoutes); // Ad report routes
 app.use("/api/favorites", favoriteRoutes); // Favorite routes
 app.use("/api/complaints", complaintRoutes); // Complaints routes
 app.use("/api/boosts", boostRoutes); // Boost routes
+app.use("/api/reviews", reviewRoutes); // Review routes
 
 // Start Cron Jobs
 startCronJobs();
