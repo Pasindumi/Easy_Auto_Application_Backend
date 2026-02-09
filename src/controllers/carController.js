@@ -544,7 +544,7 @@ export const getAdById = async (req, res) => {
         if (adData.seller_id) {
             const { data: userData, error: userError } = await supabase
                 .from("users")
-                .select("name, email, phone")
+                .select("id, name, email, phone")
                 .eq("id", adData.seller_id)
                 .single();
 
@@ -801,6 +801,57 @@ export const adminUpdateAdStatus = async (req, res) => {
 
         res.json({ success: true, data });
     } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// Delete Ad
+export const deleteAd = async (req, res) => {
+    const { id: adId } = req.params;
+    const userId = req.user.id; // From protect middleware
+
+    try {
+        // 1. Check if ad exists and belongs to the user
+        const { data: ad, error: fetchError } = await supabase
+            .from("CarAd")
+            .select("id, seller_id")
+            .eq("id", adId)
+            .single();
+
+        if (fetchError || !ad) {
+            return res.status(404).json({ success: false, message: "Ad not found" });
+        }
+
+        if (ad.seller_id !== userId) {
+            return res.status(403).json({ success: false, message: "You are not authorized to delete this ad" });
+        }
+
+        // 2. Delete related data (Cascade delete should ideally handle this in DB, but manual cleanup ensures it)
+        // AdImage, CarDetails, car_details_attribute_values, ad_boosts, etc.
+
+        // Delete Attributes
+        await supabase.from("car_details_attribute_values").delete().eq("ad_id", adId);
+
+        // Delete Details
+        await supabase.from("CarDetails").delete().eq("ad_id", adId);
+
+        // Delete Images
+        await supabase.from("AdImage").delete().eq("ad_id", adId);
+
+        // Delete Boosts (if any)
+        await supabase.from("ad_boosts").delete().eq("ad_id", adId);
+
+        // 3. Finally delete the CarAd record
+        const { error: deleteError } = await supabase
+            .from("CarAd")
+            .delete()
+            .eq("id", adId);
+
+        if (deleteError) throw deleteError;
+
+        res.json({ success: true, message: "Ad deleted successfully" });
+    } catch (error) {
+        console.error("Error deleting ad:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

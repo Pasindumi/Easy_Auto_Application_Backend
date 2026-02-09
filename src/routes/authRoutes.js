@@ -13,7 +13,8 @@ import {
     // Password Reset with OTP
     forgotPassword,
     verifyOTP,
-    resetPassword
+    resetPassword,
+    verifyPassword
 } from '../controllers/authController.js';
 import { protect } from '../middlewares/authMiddleware.js';
 
@@ -23,6 +24,7 @@ const router = express.Router();
 // USER INFO
 // ============================================
 router.get('/me', protect, getCurrentUser);
+router.post('/verify-password', protect, verifyPassword);
 
 // ============================================
 // CLERK SOCIAL AUTHENTICATION (PRIMARY METHOD)

@@ -1,6 +1,6 @@
 import express from 'express';
 import multer from 'multer';
-import { createAd, getAds, getAdById, updateAd, adminGetAds, adminUpdateAdStatus, getMyAds } from '../controllers/carController.js';
+import { createAd, getAds, getAdById, updateAd, adminGetAds, adminUpdateAdStatus, getMyAds, deleteAd } from '../controllers/carController.js';
 import { protectAdmin } from '../middlewares/adminAuthMiddleware.js';
 import { protect } from '../middlewares/authMiddleware.js';
 
@@ -27,6 +27,7 @@ router.post("/", protect, upload.array('images', 10), createAd); // POST /api/ca
 // 3. Generic ID Routes
 router.get("/:id", getAdById); // GET /api/cars/:id - Get single ad
 router.put("/:id", protect, upload.array('images', 10), updateAd); // PUT /api/cars/:id - Update ad
+router.delete("/:id", protect, deleteAd); // DELETE /api/cars/:id - Delete ad
 
 // ============================================
 // ADMIN ROUTES (Admin authentication required)
