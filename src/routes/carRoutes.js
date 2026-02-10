@@ -1,6 +1,6 @@
 import express from 'express';
 import multer from 'multer';
-import { createAd, getAds, getAdById, updateAd, adminGetAds, adminUpdateAdStatus, getMyAds, deleteAd } from '../controllers/carController.js';
+import { createAd, getAds, getAdById, updateAd, adminGetAds, adminUpdateAdStatus, adminBanAd, adminUnbanAd, getMyAds, deleteAd } from '../controllers/carController.js';
 import { protectAdmin } from '../middlewares/adminAuthMiddleware.js';
 import { protect } from '../middlewares/authMiddleware.js';
 
@@ -34,5 +34,7 @@ router.delete("/:id", protect, deleteAd); // DELETE /api/cars/:id - Delete ad
 // ============================================
 router.get("/admin/all", protectAdmin, adminGetAds); // GET /api/cars/admin/all
 router.put("/admin/:id/status", protectAdmin, adminUpdateAdStatus); // PUT /api/cars/admin/:id/status
+router.put("/admin/:id/ban", protectAdmin, adminBanAd); // PUT /api/cars/admin/:id/ban
+router.put("/admin/:id/unban", protectAdmin, adminUnbanAd); // PUT /api/cars/admin/:id/unban
 
 export default router;

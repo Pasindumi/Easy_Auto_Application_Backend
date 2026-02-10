@@ -406,7 +406,8 @@ export const getAds = async (req, res) => {
                 CarDetails!inner(*),
                 AdImage(*)
             `, { count: 'exact' })
-            .eq("status", "ACTIVE");
+            .eq("status", "ACTIVE")
+            .or('is_banned.is.null,is_banned.eq.false');
 
         if (minPrice) queryBuilder = queryBuilder.gte("price", minPrice);
         if (maxPrice) queryBuilder = queryBuilder.lte("price", maxPrice);
@@ -736,7 +737,19 @@ export const adminGetAds = async (req, res) => {
         }
 
         if (search) {
-            query = query.ilike('title', `%${search}%`);
+            // Check if search term is a UUID
+            const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(search.trim());
+
+            if (isUuid) {
+                query = query.eq('id', search.trim());
+            } else {
+                // Search in title
+                query = query.ilike('title', `%${search}%`);
+
+                // Note: Searching across seller (users) requires a different approach if using Supabase client directly
+                // because you can't easily do a cross-table search on non-joined fields without an RPC or complex or filter.
+                // For now, we'll keep it to title, but we could fetch relevant seller IDs first if needed.
+            }
         }
 
         const { data, count, error } = await query;
@@ -851,6 +864,61 @@ export const adminUpdateAdStatus = async (req, res) => {
 
         res.json({ success: true, data });
     } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// Admin: Ban Ad
+export const adminBanAd = async (req, res) => {
+    const { id } = req.params;
+    const { durationHours, reason } = req.body;
+
+    try {
+        const ban_expires_at = durationHours
+            ? new Date(Date.now() + parseInt(durationHours) * 60 * 60 * 1000).toISOString()
+            : null;
+
+        const { data, error } = await supabase
+            .from("CarAd")
+            .update({
+                is_banned: true,
+                ban_expires_at,
+                ban_reason: reason || 'Violation of terms',
+                status: 'BANNED' // Keeping status for easier UI filtering even if we have boolean
+            })
+            .eq("id", id)
+            .select()
+            .single();
+
+        if (error) throw error;
+        res.json({ success: true, message: 'Ad banned successfully', data });
+    } catch (error) {
+        console.error("Error in adminBanAd:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// Admin: Unban Ad
+export const adminUnbanAd = async (req, res) => {
+    const { id } = req.params;
+
+    try {
+        const { data, error } = await supabase
+            .from("CarAd")
+            .update({
+                is_banned: false,
+                ban_expires_at: null,
+                ban_reason: null,
+                status: 'ACTIVE' // Restore to active
+            })
+            .eq("id", id)
+            .select()
+            .single();
+
+        if (error) throw error;
+        res.json({ success: true, message: 'Ad unbanned successfully', data });
+    } catch (error) {
+        console.error("Error in adminUnbanAd:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
