@@ -545,43 +545,85 @@ export const activateFreeAdByPackage = async (req, res) => {
             return res.status(400).json({ success: false, message: "Ad is already active." });
         }
 
-        // Check if package has limits for this type
-        const { data: limit, error: lError } = await supabase
-            .from('package_ad_limits')
+        // 1.5 Global Slot Availability Check
+        const { data: globalFeatures } = await supabase
+            .from('package_features')
             .select('*')
-            .eq('package_id', packageId)
-            .eq('vehicle_type_id', ad.vehicle_type_id)
-            .single();
+            .eq('price_item_id', packageId);
 
-        if (!lError && limit && !limit.is_unlimited) {
-            // Get current usage in this subscription
-            const { data: sub } = await supabase
-                .from('user_subscriptions')
-                .select('start_date')
-                .eq('user_id', userId)
-                .eq('package_id', packageId)
-                .eq('status', 'ACTIVE')
-                .single();
+        const globalConfig = {};
+        if (globalFeatures) {
+            globalFeatures.forEach(f => globalConfig[f.feature_key] = f.feature_value);
+        }
 
-            if (sub) {
-                const typeName = ad.vehicle_types?.type_name || 'Other';
-                const typeOrderIdPrefix = `V-${typeName}`;
+        if (globalConfig.FREE_ADS_LIMIT || globalConfig.IS_UNLIMITED_ADS) {
+            const isUnlimited = globalConfig.IS_UNLIMITED_ADS === 'true' || globalConfig.IS_UNLIMITED_ADS === true;
+            if (!isUnlimited) {
+                const limitVal = parseInt(globalConfig.FREE_ADS_LIMIT) || 0;
 
-                // Count how many tracking records exist for this package and SPECIFIC vehicle type in this period
-                const { count } = await supabase
-                    .from('payments')
-                    .select('*', { count: 'exact', head: true })
+                // Get current usage in this subscription
+                const { data: sub } = await supabase
+                    .from('user_subscriptions')
+                    .select('start_date')
                     .eq('user_id', userId)
                     .eq('package_id', packageId)
-                    .eq('status', 'SUCCESS')
-                    .eq('order_id', typeOrderIdPrefix)
-                    .gte('created_at', sub.start_date);
+                    .eq('status', 'ACTIVE')
+                    .single();
 
-                if (count >= limit.quantity) {
-                    return res.status(400).json({ success: false, message: "Package ad posting limit reached for this vehicle type." });
+                if (sub) {
+                    const { count: totalCount } = await supabase
+                        .from('payments')
+                        .select('*', { count: 'exact', head: true })
+                        .eq('user_id', userId)
+                        .eq('package_id', packageId)
+                        .eq('status', 'SUCCESS')
+                        .like('order_id', 'V-%')
+                        .gte('created_at', sub.start_date);
+
+                    if (totalCount >= limitVal) {
+                        return res.status(400).json({ success: false, message: "Total package ad posting limit reached." });
+                    }
                 }
             }
+            // If global limit is checked or is unlimited, we skip the per-type check below
+        } else {
+            // Check if package has limits for this type (Legacy Per-Type Logic)
+            const { data: limit, error: lError } = await supabase
+                .from('package_ad_limits')
+                .select('*')
+                .eq('package_id', packageId)
+                .eq('vehicle_type_id', ad.vehicle_type_id)
+                .single();
 
+            if (!lError && limit && !limit.is_unlimited) {
+                // Get current usage in this subscription
+                const { data: sub } = await supabase
+                    .from('user_subscriptions')
+                    .select('start_date')
+                    .eq('user_id', userId)
+                    .eq('package_id', packageId)
+                    .eq('status', 'ACTIVE')
+                    .single();
+
+                if (sub) {
+                    const typeName = ad.vehicle_types?.type_name || 'Other';
+                    const typeOrderIdPrefix = `V-${typeName}`;
+
+                    // Count how many tracking records exist for this package and SPECIFIC vehicle type in this period
+                    const { count } = await supabase
+                        .from('payments')
+                        .select('*', { count: 'exact', head: true })
+                        .eq('user_id', userId)
+                        .eq('package_id', packageId)
+                        .eq('status', 'SUCCESS')
+                        .eq('order_id', typeOrderIdPrefix)
+                        .gte('created_at', sub.start_date);
+
+                    if (count >= limit.quantity) {
+                        return res.status(400).json({ success: false, message: "Package ad posting limit reached for this vehicle type." });
+                    }
+                }
+            }
         }
 
         const typeName = ad.vehicle_types?.type_name || 'Other';

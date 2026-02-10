@@ -486,26 +486,7 @@ export const getUserActivePackage = async (req, res) => {
             };
         });
 
-        // 5. Check Included Items for Global Limits (Image / Description)
-        // Look for price_items code 'IMG' (Images) or 'LTR' (Letters/Description) mapped via included_items
-        // Or assume they might be stored as Features. 
-        // The user says "Included Items" has "Image Limit" inside it.
-
-        let imageLimit = 5; // Default
-        let descriptionLimit = 500; // Default
-
-        // Check for specific item codes in included items
-        // Assuming item with code 'EXTRA_IMG' or similar defines the limit?
-        // Actually, usually "Included Items" are just "Free 5 Images". 
-        // Let's look for items with type 'LIMIT_MODIFIER' or similar, OR just specific known codes.
-
-        // Strategy: Look for items with code 'IMG_LIMIT' or 'DESC_LIMIT' if they exist, 
-        // or check quantities of 'IMG' items. 
-        // Based on previous context, we might rely on the `pricing_rules` mostly, 
-        // BUT if the package overrides it, we need to know.
-        // Let's return the raw included items to frontend to parse for now, 
-        // or try to find a 'feature' for it if config exists.
-
+        // 5. Fetch Package Features & Pricing Rules
         const { data: features, error: featError } = await supabase
             .from('package_features')
             .select('*')
@@ -513,17 +494,31 @@ export const getUserActivePackage = async (req, res) => {
 
         if (featError) throw featError;
 
-        // FETCH PACKAGE PRICING RULE (for limits)
+        const config = {};
+        features.forEach(f => config[f.feature_key] = f.feature_value);
+
         const { data: pricingRules, error: ruleError } = await supabase
             .from('pricing_rules')
             .select('*')
             .eq('price_item_id', packageId);
 
-        // We might want to pass these rules to frontend so it can see "free_image_count" directly from the package definition
-        // instead of relying on frontend to fetch ALL rules and find it.
+        // 6. Global Limit Calculation (New Feature)
+        let globalLimit = null;
+        if (config.FREE_ADS_LIMIT || config.IS_UNLIMITED_ADS) {
+            const totalUsed = usageHistory.filter(h => h.order_id && h.order_id.startsWith('V-')).length;
+            const isUnlimited = config.IS_UNLIMITED_ADS === 'true' || config.IS_UNLIMITED_ADS === true;
+            const limitVal = parseInt(config.FREE_ADS_LIMIT) || 0;
 
-        const config = {};
-        features.forEach(f => config[f.feature_key] = f.feature_value);
+            globalLimit = {
+                total_limit: limitVal,
+                total_used: totalUsed,
+                total_remaining: isUnlimited ? 9999 : Math.max(0, limitVal - totalUsed),
+                is_unlimited: isUnlimited
+            };
+        }
+
+        // 7. Check Included Items for Global Limits (Image / Description)
+        // ... (rest of the comments)
 
         res.json({
             success: true,
@@ -534,6 +529,7 @@ export const getUserActivePackage = async (req, res) => {
                 subscription: subscription,
                 package: subscription.price_items,
                 limits: finalLimits,
+                global_limit: globalLimit, // Add global limit info
                 includedItems: includedItems,
                 packageRules: pricingRules || [],
                 config: config
