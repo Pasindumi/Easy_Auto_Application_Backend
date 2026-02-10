@@ -62,6 +62,32 @@ export const getActiveSubscriptions = async () => {
     }
 }
 
+export const getActiveSubscriptionsForUser = async (userId) => {
+    try {
+        const { data, error } = await supabase
+            .from('user_subscriptions')
+            .select(`
+                id,
+                user_id,
+                package_id,
+                start_date,
+                end_date,
+                status,
+                users (id, email, name),
+                price_items (id, name)
+            `)
+            .eq('user_id', userId)
+            .eq('status', 'ACTIVE')
+            .gt('end_date', new Date().toISOString());
+
+        if (error) throw error;
+        return data;
+    } catch (error) {
+        console.error(`Error fetching active subscriptions for user ${userId}:`, error);
+        return [];
+    }
+};
+
 export const getPackageAdLimits = async (packageId) => {
     try {
         const { data, error } = await supabase
@@ -85,12 +111,11 @@ export const getUserAdUsage = async (userId, startDate, endDate) => {
     try {
         // Count active ads created within subscription period
         const { data, error } = await supabase
-            .from('car_ads') // Assuming table name is car_ads based on user request saying 'CarAd' but usually postgres is snake_case. Checking context... User said 'CarAd', I will check actual table name if possible. Let's assume car_ads or check. Context said 'CarAd' tracking. I'll stick to 'car_ads' convention or maybe 'CarAd' if case sensitive. I will assume 'CarAd' is the entity, table likely 'car_ads'.
-            // WAIT - User context said "CarAd (seller_id...)". Supabase tables are usually lower case. I'll try 'car_ads'.
+            .from('CarAd') // Corrected table name from 'car_ads' to 'CarAd' matching controller usage
             .select('vehicle_type_id')
             .eq('seller_id', userId)
             //.eq('status', 'ACTIVE') // Should we only count active ads? "Count ads posted by user". Usually limits apply to posted ads regardless of current status, or active ones. Requirement says "status = 'ACTIVE'".
-            .eq('status', 'active') // Assuming lowercase status
+            .in('status', ['ACTIVE', 'DRAFT', 'PENDING', 'PENDING_APPROVAL']) // Assuming lowercase status
             .gte('created_at', startDate)
             .lte('created_at', endDate);
 
