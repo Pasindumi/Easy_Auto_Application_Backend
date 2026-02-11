@@ -1,5 +1,7 @@
 import supabase from '../config/supabase.js';
 import { uploadFileToS3 } from '../utils/s3Service.js';
+import * as subscriptionService from '../services/subscriptionService.js';
+import * as emailService from '../services/emailService.js';
 
 // Create a new Car Ad
 export const createAd = async (req, res) => {
@@ -158,6 +160,44 @@ export const createAd = async (req, res) => {
             if (imgError) console.error("Image Insert Error:", imgError);
         }
 
+        // Limit Warning Logic
+        try {
+            const activeSubs = await subscriptionService.getActiveSubscriptionsForUser(seller_id);
+            // Find subscription that covers this vehicle type
+            // Note: A user might have multiple subscriptions, we need to find the one that this ad counts towards.
+            // Usually, the system should deduct from one. 
+            // Since we don't have explicit "deduct from sub X" logic visible here (it might be implicit or just based on validity),
+            // We will check all active subs that cover this vehicle type.
+
+            for (const sub of activeSubs) {
+                const limits = await subscriptionService.getPackageAdLimits(sub.package_id);
+                // Normalize IDs to string for safe comparison
+                const targetTypeId = String(safeVehicleTypeId);
+                const limitForType = limits.find(l => String(l.vehicle_types?.id) === targetTypeId);
+
+                console.log(`Debug AdLimit: Checking Sub ${sub.id}, Type ${targetTypeId}. Found Limit: ${limitForType ? 'Yes' : 'No'}`);
+
+                if (limitForType && !limitForType.is_unlimited) {
+                    const usage = await subscriptionService.getUserAdUsage(seller_id, sub.start_date, sub.end_date);
+                    const posted = usage[targetTypeId] || usage[safeVehicleTypeId] || 0;
+
+                    const allowed = limitForType.quantity;
+                    const remaining = allowed - posted;
+
+                    console.log(`Debug AdLimit: Posted ${posted}, Allowed ${allowed}, Remaining ${remaining}`);
+
+                    if (remaining <= 1) { // Covers 1, 0, and even negative (over limit)
+                        console.log(`Triggering Ad Limit Warning for User ${seller_id}`);
+                        await emailService.sendAdLimitWarningEmail(seller_id, sub.id, usage, limits);
+                    }
+                }
+            }
+
+        } catch (warningError) {
+            console.error("Ad Limit Warning Error:", warningError);
+            // Don't fail the request if warning fails
+        }
+
         res.status(201).json({
             success: true,
             message: "Car ad created successfully!",
@@ -168,6 +208,9 @@ export const createAd = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+// Moving the check inside the success flow before response for simplicity and reliability
+// Re-implementing the end of createAd to include the check.
 
 // Update Ad
 export const updateAd = async (req, res) => {
@@ -508,6 +551,12 @@ export const getAds = async (req, res) => {
         }
 
         const { sort, order } = req.query;
+        if (req.query.ids) {
+            const idsList = req.query.ids.split(',').map(id => id.trim()).filter(id => id);
+            if (idsList.length > 0) {
+                queryBuilder = queryBuilder.in('id', idsList);
+            }
+        }
 
         // Apply pagination and boost sorting
         queryBuilder = queryBuilder.range(start, end);
