@@ -17,6 +17,7 @@ import complaintRoutes from "./routes/complaintRoutes.js";
 import boostRoutes from "./routes/boostRoutes.js";
 import reviewRoutes from "./routes/reviewRoutes.js";
 import chatRoutes from "./routes/chatRoutes.js";
+import appReviewRoutes from "./routes/appReviewRoutes.js";
 import startCronJobs from "./utils/cronJobs.js";
 
 const app = express();
@@ -55,6 +56,7 @@ app.use("/api/complaints", complaintRoutes); // Complaints routes
 app.use("/api/boosts", boostRoutes); // Boost routes
 app.use("/api/reviews", reviewRoutes); // Review routes
 app.use("/api/chat", chatRoutes); // Chat routes
+app.use("/api/app-reviews", appReviewRoutes); // App Review routes
 
 // Start Cron Jobs
 startCronJobs();
