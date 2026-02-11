@@ -1,6 +1,6 @@
 import express from 'express';
 import multer from 'multer';
-import { createAd, getAds, getAdById, updateAd, adminGetAds, adminUpdateAdStatus, adminBanAd, adminUnbanAd, getMyAds, deleteAd } from '../controllers/carController.js';
+import { createAd, getAds, getAdById, updateAd, adminGetAds, adminUpdateAdStatus, adminBanAd, adminUnbanAd, getMyAds, deleteAd, getTrendingAds, getRecommendedAds } from '../controllers/carController.js';
 import { protectAdmin } from '../middlewares/adminAuthMiddleware.js';
 import { protect } from '../middlewares/authMiddleware.js';
 
@@ -21,6 +21,8 @@ const upload = multer({
 router.get("/my-ads", protect, getMyAds); // GET /api/cars/my-ads
 
 // 2. Collection Routes
+router.get("/trending", getTrendingAds); // GET /api/cars/trending - Get trending ads
+router.get("/recommended", getRecommendedAds); // GET /api/cars/recommended - Get mixed recommended ads
 router.get("/", getAds); // GET /api/cars - List all ads
 router.post("/", protect, upload.array('images', 10), createAd); // POST /api/cars - Create new ad
 

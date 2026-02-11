@@ -347,6 +347,124 @@ export const updateAd = async (req, res) => {
     }
 };
 
+// Get Trending Ads (Most Reviewed)
+export const getTrendingAds = async (req, res) => {
+    try {
+        // 1. Fetch all reviews to calculate popularity
+        // Note: For a larger scale app, this should be replaced with a DB View or RPC or a counter column on CarAd
+        const { data: reviews, error: reviewError } = await supabase
+            .from('reviews')
+            .select('ad_id');
+
+        if (reviewError) throw reviewError;
+
+        // 2. Count reviews per ad
+        const adCounts = {};
+        reviews.forEach(r => {
+            if (r.ad_id) {
+                adCounts[r.ad_id] = (adCounts[r.ad_id] || 0) + 1;
+            }
+        });
+
+        // 3. Sort ad IDs by count (descending)
+        const sortedAdIds = Object.keys(adCounts).sort((a, b) => adCounts[b] - adCounts[a]);
+
+        // 4. Take top 10 (or limit)
+        const topAdIds = sortedAdIds.slice(0, 10);
+
+        if (topAdIds.length === 0) {
+            return res.json({ success: true, data: [] });
+        }
+
+        // 5. Fetch the actual ads
+        const { data: ads, error: adError } = await supabase
+            .from("CarAd")
+            .select(`
+                *,
+                CarDetails!inner(*),
+                AdImage(*),
+                vehicle_type:vehicle_types(type_name)
+            `)
+            .in('id', topAdIds)
+            .eq("status", "ACTIVE");
+
+        if (adError) throw adError;
+
+        // 6. Preserve order (since .in() doesn't guarantee order)
+        // and attach review count
+        const orderedAds = topAdIds
+            .map(id => ads.find(ad => ad.id === id))
+            .filter(Boolean) // Remove if not found (e.g. inactive)
+            .map(ad => ({
+                ...ad,
+                review_count: adCounts[ad.id]
+            }));
+
+        res.json({ success: true, data: orderedAds });
+
+    } catch (error) {
+        console.error("Error fetching trending ads:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// Get Recommended Ads (Mixed Vehicle Types)
+export const getRecommendedAds = async (req, res) => {
+    try {
+        // 1. Fetch active ads (limit 50 recent to mix from)
+        const { data: ads, error } = await supabase
+            .from("CarAd")
+            .select(`
+                *,
+                CarDetails!inner(*),
+                AdImage(*),
+                vehicle_type:vehicle_types(type_name)
+            `)
+            .eq("status", "ACTIVE")
+            .order('created_at', { ascending: false })
+            .limit(50);
+
+        if (error) throw error;
+
+        if (!ads || ads.length === 0) {
+            return res.json({ success: true, data: [] });
+        }
+
+        // 2. Group by vehicle_type_id
+        const grouped = {};
+        ads.forEach(ad => {
+            const typeId = ad.vehicle_type_id || 'unknown';
+            if (!grouped[typeId]) grouped[typeId] = [];
+            grouped[typeId].push(ad);
+        });
+
+        // 3. Round-robin interleaving
+        const mixedAds = [];
+        const typeKeys = Object.keys(grouped);
+        let maxLen = 0;
+        typeKeys.forEach(key => {
+            if (grouped[key].length > maxLen) maxLen = grouped[key].length;
+        });
+
+        for (let i = 0; i < maxLen; i++) {
+            for (const key of typeKeys) {
+                if (grouped[key][i]) {
+                    mixedAds.push(grouped[key][i]);
+                }
+            }
+        }
+
+        // 4. Limit result (e.g. top 10 or 20 mixed)
+        const finalAds = mixedAds.slice(0, 20);
+
+        res.json({ success: true, data: finalAds });
+
+    } catch (error) {
+        console.error("Error fetching recommended ads:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 // Get all ads (Public)
 export const getAds = async (req, res) => {
     const { page, limit, brand, model, minPrice, maxPrice, vehicleTypeId, location, search, isHomepageBanner, isPopupPromotion } = req.query;
@@ -389,11 +507,18 @@ export const getAds = async (req, res) => {
             queryBuilder = queryBuilder.eq('is_popup_promotion', true);
         }
 
+        const { sort, order } = req.query;
+
         // Apply pagination and boost sorting
-        queryBuilder = queryBuilder
-            .range(start, end)
-            .order('is_featured', { ascending: false })
-            .order('created_at', { ascending: false });
+        queryBuilder = queryBuilder.range(start, end);
+
+        if (sort) {
+            queryBuilder = queryBuilder.order(sort, { ascending: order === 'asc' });
+        } else {
+            queryBuilder = queryBuilder
+                .order('is_featured', { ascending: false })
+                .order('created_at', { ascending: false });
+        }
 
         const { data, count, error } = await queryBuilder;
 
