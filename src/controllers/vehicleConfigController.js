@@ -79,6 +79,64 @@ export const updateVehicleType = async (req, res) => {
         res.json(data);
     } catch (error) {
         console.error('Vehicle Config Error:', error);
+    }
+};
+
+export const deleteVehicleType = async (req, res) => {
+    const { id } = req.params;
+    try {
+        // 1. Delete dependent Attributes
+        const { error: attrError } = await supabase
+            .from('vehicle_attributes')
+            .delete()
+            .eq('vehicle_type_id', id);
+        if (attrError) throw attrError;
+
+        // 2. Delete dependent Conditions
+        const { error: condError } = await supabase
+            .from('vehicle_conditions')
+            .delete()
+            .eq('vehicle_type_id', id);
+        if (condError) throw condError;
+
+        // 3. Delete dependent Models first (referenced by brands?) - Models have brand_id and type_id. 
+        // Actually models reference brands, so if we delete brands, models might cascade or fail.
+        // Safest is to delete models first.
+        const { error: modelError } = await supabase
+            .from('vehicle_models')
+            .delete()
+            .eq('vehicle_type_id', id);
+        if (modelError) throw modelError;
+
+        // 4. Delete dependent Brands
+        const { error: brandError } = await supabase
+            .from('vehicle_brands')
+            .delete()
+            .eq('vehicle_type_id', id);
+        if (brandError) throw brandError;
+
+        // 5. Delete dependent Cars (Ads) - Table name is 'CarAd' and column 'vehicle_type_id'
+        const { error: carError } = await supabase
+            .from('CarAd')
+            .delete()
+            .eq('vehicle_type_id', id);
+
+        if (carError) {
+            console.log("Error deleting cars (might vary by schema):", carError);
+            // If this fails, we might still proceed if it's just a column name mismatch, 
+            // but if constraints exist, the final type delete will fail anyway.
+        }
+
+        // 6. Finally Delete the Type
+        const { error } = await supabase
+            .from('vehicle_types')
+            .delete()
+            .eq('id', id);
+
+        if (error) throw error;
+        res.json({ message: 'Vehicle type and all related data deleted successfully' });
+    } catch (error) {
+        console.error('Delete Vehicle Type Error:', error);
         res.status(500).json({ message: error.message });
     }
 };
@@ -167,6 +225,53 @@ export const updateAttribute = async (req, res) => {
 };
 
 // --- Vehicle Brands ---
+
+// Get All Brands (with optional Type Filter and Randomization)
+export const getAllBrands = async (req, res) => {
+    const { type_id, random, limit } = req.query;
+
+    try {
+        let query = supabase
+            .from('vehicle_brands')
+            .select('*')
+            .eq('status', 'ACTIVE'); // Users see active only
+
+        if (type_id && type_id !== 'all') {
+            query = query.eq('vehicle_type_id', type_id);
+        }
+
+        const { data, error } = await query;
+
+        if (error) throw error;
+
+        let result = data || [];
+
+        // Randomize if requested
+        if (random === 'true') {
+            // Fisher-Yates Shuffle
+            for (let i = result.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [result[i], result[j]] = [result[j], result[i]];
+            }
+        } else {
+            // Sort A-Z if not random
+            result.sort((a, b) => a.brand_name.localeCompare(b.brand_name));
+        }
+
+        // Limit
+        if (limit) {
+            const limitInt = parseInt(limit);
+            if (!isNaN(limitInt) && limitInt > 0) {
+                result = result.slice(0, limitInt);
+            }
+        }
+
+        res.json(result);
+    } catch (error) {
+        console.error('Vehicle Config Error:', error);
+        res.status(500).json({ message: error.message });
+    }
+};
 
 export const getBrandsByType = async (req, res) => {
     const { typeId } = req.params;

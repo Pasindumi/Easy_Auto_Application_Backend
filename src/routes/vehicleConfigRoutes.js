@@ -1,9 +1,9 @@
 import express from 'express';
 import {
-    getVehicleTypes, createVehicleType, updateVehicleType, updateVehicleTypeStatus,
+    getVehicleTypes, createVehicleType, updateVehicleType, updateVehicleTypeStatus, deleteVehicleType,
     getAttributesByType, createAttribute, updateAttribute,
 
-    getBrandsByType, createBrand, updateBrand,
+    getBrandsByType, createBrand, updateBrand, getAllBrands,
     getModelsByType, createModel, getModelsByBrand,
     getConditionsByType, createCondition, deleteCondition
 } from '../controllers/vehicleConfigController.js';
@@ -22,6 +22,7 @@ const router = express.Router();
 // Public Routes (Read-only for App)
 router.get('/types', getVehicleTypes);
 router.get('/attributes/:typeId', getAttributesByType);
+router.get('/brands', getAllBrands); // GET /api/vehicle-config/brands?type_id=...&random=true
 router.get('/brands/:typeId', getBrandsByType);
 router.get('/models/:typeId', getModelsByType);
 router.get('/models/by-brand/:brandId', getModelsByBrand);
@@ -31,6 +32,7 @@ router.get('/conditions/:typeId', getConditionsByType);
 router.post('/types', protectAdmin, createVehicleType);
 router.put('/types/:id', protectAdmin, updateVehicleType);
 router.put('/types/:id/status', protectAdmin, updateVehicleTypeStatus);
+router.delete('/types/:id', protectAdmin, deleteVehicleType);
 
 
 router.post('/attributes', protectAdmin, createAttribute);
