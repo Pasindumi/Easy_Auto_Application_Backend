@@ -1,10 +1,10 @@
 import express from 'express';
 import {
     getVehicleTypes, createVehicleType, updateVehicleType, updateVehicleTypeStatus, deleteVehicleType,
-    getAttributesByType, createAttribute, updateAttribute,
+    getAttributesByType, createAttribute, updateAttribute, deleteAttribute,
 
-    getBrandsByType, createBrand, updateBrand, getAllBrands,
-    getModelsByType, createModel, getModelsByBrand,
+    getBrandsByType, createBrand, updateBrand, deleteBrand, getAllBrands,
+    getModelsByType, createModel, deleteModel, getModelsByBrand,
     getConditionsByType, createCondition, deleteCondition
 } from '../controllers/vehicleConfigController.js';
 import { protectAdmin } from '../middlewares/adminAuthMiddleware.js';
@@ -37,10 +37,15 @@ router.delete('/types/:id', protectAdmin, deleteVehicleType);
 
 router.post('/attributes', protectAdmin, createAttribute);
 router.put('/attributes/:id', protectAdmin, updateAttribute);
+router.delete('/attributes/:id', protectAdmin, deleteAttribute);
 
 router.post('/brands', protectAdmin, upload.single('brand_image'), createBrand);
 router.put('/brands/:id', protectAdmin, upload.single('brand_image'), updateBrand);
+router.delete('/brands/:id', protectAdmin, deleteBrand);
+
 router.post('/models', protectAdmin, createModel);
+router.delete('/models/:id', protectAdmin, deleteModel);
+
 router.post('/conditions', protectAdmin, createCondition);
 router.delete('/conditions/:id', protectAdmin, deleteCondition);
 

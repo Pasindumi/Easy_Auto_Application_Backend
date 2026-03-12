@@ -327,3 +327,120 @@ export const sendMessage = async (req, res) => {
         });
     }
 };
+
+/**
+ * Delete a message
+ * DELETE /api/chat/messages/:id
+ */
+export const deleteMessage = async (req, res) => {
+    try {
+        const { id: messageId } = req.params;
+        const userId = req.user.id;
+
+        // 1. Get message to find its conversation
+        const { data: message, error: mError } = await supabase
+            .from('messages')
+            .select('conversation_id, sender_id')
+            .eq('id', messageId)
+            .single();
+
+        if (mError || !message) {
+            return res.status(404).json({
+                success: false,
+                message: 'Message not found'
+            });
+        }
+
+        // 2. Verify participation (anyone in chat can delete for themselves, 
+        // but for simplicity we'll let them delete from the DB)
+        const { data: participant, error: pError } = await supabase
+            .from('conversation_participants')
+            .select('id')
+            .eq('conversation_id', message.conversation_id)
+            .eq('user_id', userId)
+            .single();
+
+        if (pError || !participant) {
+            return res.status(403).json({
+                success: false,
+                message: 'Not authorized to delete this message'
+            });
+        }
+
+        // 3. Delete message
+        const { error: dError } = await supabase
+            .from('messages')
+            .delete()
+            .eq('id', messageId);
+
+        if (dError) throw dError;
+
+        return res.status(200).json({
+            success: true,
+            message: 'Message deleted successfully'
+        });
+    } catch (error) {
+        console.error('Delete Message Error:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to delete message'
+        });
+    }
+};
+
+/**
+ * Delete a conversation
+ * DELETE /api/chat/conversations/:id
+ */
+export const deleteConversation = async (req, res) => {
+    try {
+        const { id: conversationId } = req.params;
+        const userId = req.user.id;
+
+        // 1. Verify participation
+        const { data: participant, error: pError } = await supabase
+            .from('conversation_participants')
+            .select('id')
+            .eq('conversation_id', conversationId)
+            .eq('user_id', userId)
+            .single();
+
+        if (pError || !participant) {
+            return res.status(403).json({
+                success: false,
+                message: 'Not authorized to delete this conversation'
+            });
+        }
+
+        // 2. Delete messages first (to ensure no orphan records if no cascade)
+        await supabase
+            .from('messages')
+            .delete()
+            .eq('conversation_id', conversationId);
+
+        // 3. Delete participants
+        await supabase
+            .from('conversation_participants')
+            .delete()
+            .eq('conversation_id', conversationId);
+
+        // 4. Delete conversation
+        const { error: dError } = await supabase
+            .from('conversations')
+            .delete()
+            .eq('id', conversationId);
+
+        if (dError) throw dError;
+
+        return res.status(200).json({
+            success: true,
+            message: 'Conversation deleted successfully'
+        });
+    } catch (error) {
+        console.error('Delete Conversation Error:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to delete conversation'
+        });
+    }
+};

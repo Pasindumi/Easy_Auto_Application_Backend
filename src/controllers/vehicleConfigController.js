@@ -224,6 +224,31 @@ export const updateAttribute = async (req, res) => {
     }
 };
 
+export const deleteAttribute = async (req, res) => {
+    const { id } = req.params;
+    try {
+        // 1. Delete Options
+        const { error: optError } = await supabase
+            .from('vehicle_attribute_options')
+            .delete()
+            .eq('attribute_id', id);
+
+        if (optError) throw optError;
+
+        // 2. Delete Attribute
+        const { error } = await supabase
+            .from('vehicle_attributes')
+            .delete()
+            .eq('id', id);
+
+        if (error) throw error;
+        res.json({ success: true, message: 'Attribute deleted' });
+    } catch (error) {
+        console.error('Vehicle Config Error:', error);
+        res.status(500).json({ message: error.message });
+    }
+};
+
 // --- Vehicle Brands ---
 
 // Get All Brands (with optional Type Filter and Randomization)
@@ -351,6 +376,31 @@ export const updateBrand = async (req, res) => {
     }
 };
 
+export const deleteBrand = async (req, res) => {
+    const { id } = req.params;
+    try {
+        // 1. Delete dependent Models
+        const { error: modelError } = await supabase
+            .from('vehicle_models')
+            .delete()
+            .eq('brand_id', id);
+
+        if (modelError) throw modelError;
+
+        // 2. Delete Brand
+        const { error } = await supabase
+            .from('vehicle_brands')
+            .delete()
+            .eq('id', id);
+
+        if (error) throw error;
+        res.json({ success: true, message: 'Brand deleted' });
+    } catch (error) {
+        console.error('Vehicle Config Error:', error);
+        res.status(500).json({ message: error.message });
+    }
+};
+
 // --- Vehicle Models ---
 
 export const getModelsByType = async (req, res) => {
@@ -389,6 +439,22 @@ export const createModel = async (req, res) => {
 
         if (error) throw error;
         res.status(201).json(data);
+    } catch (error) {
+        console.error('Vehicle Config Error:', error);
+        res.status(500).json({ message: error.message });
+    }
+};
+
+export const deleteModel = async (req, res) => {
+    const { id } = req.params;
+    try {
+        const { error } = await supabase
+            .from('vehicle_models')
+            .delete()
+            .eq('id', id);
+
+        if (error) throw error;
+        res.json({ success: true, message: 'Model deleted' });
     } catch (error) {
         console.error('Vehicle Config Error:', error);
         res.status(500).json({ message: error.message });
