@@ -9,11 +9,16 @@ const PORT = process.env.PORT || 5000;
 // Create HTTP server
 const httpServer = createServer(app);
 
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+    ? process.env.ALLOWED_ORIGINS.split(",")
+    : ["*"];
+
 // Initialize Socket.io
 const io = new Server(httpServer, {
     cors: {
-        origin: "*", // Adjust this in production
-        methods: ["GET", "POST"]
+        origin: allowedOrigins,
+        methods: ["GET", "POST"],
+        credentials: true
     }
 });
 

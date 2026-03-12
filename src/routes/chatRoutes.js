@@ -4,7 +4,9 @@ import {
     getConversations,
     getMessages,
     startConversation,
-    sendMessage
+    sendMessage,
+    deleteMessage,
+    deleteConversation
 } from '../controllers/chatController.js';
 import { protect } from '../middlewares/authMiddleware.js';
 
@@ -34,8 +36,13 @@ router.get('/conversations/:id/messages', getMessages);
 router.post('/conversations', startConversation);
 
 /**
- * @route POST /api/chat/conversations/:id/messages
+ * @route DELETE /api/chat/messages/:id
  */
-router.post('/conversations/:id/messages', sendMessage);
+router.delete('/messages/:id', deleteMessage);
+
+/**
+ * @route DELETE /api/chat/conversations/:id
+ */
+router.delete('/conversations/:id', deleteConversation);
 
 export default router;
