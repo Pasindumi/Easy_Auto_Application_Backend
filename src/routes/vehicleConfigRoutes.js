@@ -22,9 +22,11 @@ const router = express.Router();
 // Public Routes (Read-only for App)
 router.get('/types', getVehicleTypes);
 router.get('/attributes/:typeId', getAttributesByType);
+router.get('/brands', getBrandsByType); // Support query params
 router.get('/brands/:typeId', getBrandsByType);
 router.get('/models/:typeId', getModelsByType);
 router.get('/models/by-brand/:brandId', getModelsByBrand);
+router.get('/conditions', getConditionsByType);
 router.get('/conditions/:typeId', getConditionsByType);
 
 // Admin Routes (Write access)

@@ -96,3 +96,37 @@ export const getReviewStats = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+// Get All Reviews (App-wide)
+export const getAllReviews = async (req, res) => {
+    const { rating, limit } = req.query;
+
+    try {
+        let query = supabase
+            .from('reviews')
+            .select(`
+                *,
+                user:users(id, name, email),
+                ad:CarAd(id, title)
+            `);
+        
+        if (rating) {
+            query = query.eq('rating', rating);
+        }
+
+        query = query.order('created_at', { ascending: false });
+
+        if (limit) {
+            query = query.limit(parseInt(limit));
+        }
+
+        const { data, error } = await query;
+
+        if (error) throw error;
+
+        res.json({ success: true, data });
+    } catch (error) {
+        console.error("Error fetching all reviews:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};

@@ -22,6 +22,8 @@ router.get("/my-ads", protect, getMyAds); // GET /api/cars/my-ads
 
 // 2. Collection Routes
 router.get("/", getAds); // GET /api/cars - List all ads
+router.get("/trending", getAds); // Fallback to getAds for now, or specific controller
+router.get("/recommended", getAds); // Fallback to getAds for now
 router.post("/", protect, upload.array('images', 10), createAd); // POST /api/cars - Create new ad
 
 // 3. Generic ID Routes

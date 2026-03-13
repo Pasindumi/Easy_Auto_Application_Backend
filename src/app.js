@@ -1,6 +1,11 @@
 import express from "express";
 import cors from "cors";
 import morgan from "morgan";
+import dotenv from "dotenv";
+dotenv.config();
+
+console.log("CLERK_PUBLISHABLE_KEY exists:", !!process.env.CLERK_PUBLISHABLE_KEY);
+
 import { clerkMiddleware } from "@clerk/express";
 import authRoutes from "./routes/authRoutes.js";
 import carRoutes from "./routes/carRoutes.js";
@@ -15,6 +20,7 @@ import favoriteRoutes from "./routes/favoriteRoutes.js";
 import complaintRoutes from "./routes/complaintRoutes.js";
 import boostRoutes from "./routes/boostRoutes.js";
 import reviewRoutes from "./routes/reviewRoutes.js";
+import announcementRoutes from "./routes/announcementRoutes.js";
 import startCronJobs from "./utils/cronJobs.js";
 
 const app = express();
@@ -51,6 +57,8 @@ app.use("/api/favorites", favoriteRoutes); // Favorite routes
 app.use("/api/complaints", complaintRoutes); // Complaints routes
 app.use("/api/boosts", boostRoutes); // Boost routes
 app.use("/api/reviews", reviewRoutes); // Review routes
+app.use("/api/app-reviews", reviewRoutes); 
+app.use("/api/announcements", announcementRoutes); // Announcement routes
 
 // Start Cron Jobs
 startCronJobs();

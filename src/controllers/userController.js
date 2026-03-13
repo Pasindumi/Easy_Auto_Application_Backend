@@ -157,3 +157,64 @@ export const deleteUser = async (req, res) => {
         });
     }
 };
+
+/**
+ * Get user statistics
+ * Returns counts for ads, saved items, and total views
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+export const getUserStats = async (req, res) => {
+    try {
+        const userId = req.user?.id;
+
+        if (!userId) {
+            return res.status(401).json({
+                success: false,
+                message: 'Unauthorized: No user ID found'
+            });
+        }
+
+        // 1. Get Ads Count
+        const { count: adsCount, error: adsError } = await supabase
+            .from('CarAd')
+            .select('id', { count: 'exact', head: true })
+            .eq('seller_id', userId);
+
+        if (adsError) throw adsError;
+
+        // 2. Get Saved (Wishlist) Count
+        const { count: savedCount, error: savedError } = await supabase
+            .from('wishlist')
+            .select('id', { count: 'exact', head: true })
+            .eq('user_id', userId);
+
+        if (savedError) throw savedError;
+
+        // 3. Get Total Views (Sum of views_count across all user's ads)
+        const { data: viewsData, error: viewsError } = await supabase
+            .from('CarAd')
+            .select('views_count')
+            .eq('seller_id', userId);
+
+        if (viewsError) throw viewsError;
+
+        const totalViews = viewsData.reduce((sum, ad) => sum + (ad.views_count || 0), 0);
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                ads: adsCount || 0,
+                saved: savedCount || 0,
+                views: totalViews || 0
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching user stats:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to fetch user statistics',
+            error: error.message
+        });
+    }
+};

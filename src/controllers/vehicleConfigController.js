@@ -169,14 +169,31 @@ export const updateAttribute = async (req, res) => {
 // --- Vehicle Brands ---
 
 export const getBrandsByType = async (req, res) => {
-    const { typeId } = req.params;
+    const typeId = req.params.typeId || req.query.type_id;
+    const { limit, random } = req.query;
+
     try {
-        const { data, error } = await supabase
+        let query = supabase
             .from('vehicle_brands')
             .select('*')
-            .eq('vehicle_type_id', typeId)
-            .eq('status', 'ACTIVE') // Usually fetches active only for users, but admins might want all.
-            .order('brand_name', { ascending: true });
+            .eq('status', 'ACTIVE');
+        
+        if (typeId) {
+            query = query.eq('vehicle_type_id', typeId);
+        }
+
+        if (random === 'true') {
+            // Simple random mock for now
+            query = query.order('brand_name', { ascending: Math.random() > 0.5 });
+        } else {
+            query = query.order('brand_name', { ascending: true });
+        }
+
+        if (limit) {
+            query = query.limit(parseInt(limit));
+        }
+
+        const { data, error } = await query;
 
         if (error) throw error;
         res.json(data);
@@ -293,13 +310,18 @@ export const createModel = async (req, res) => {
 // --- Vehicle Conditions ---
 
 export const getConditionsByType = async (req, res) => {
-    const { typeId } = req.params;
+    const typeId = req.params.typeId || req.query.type_id;
     try {
-        const { data, error } = await supabase
+        let query = supabase
             .from('vehicle_conditions')
             .select('*')
-            .eq('vehicle_type_id', typeId)
-            .eq('status', 'ACTIVE')
+            .eq('status', 'ACTIVE');
+        
+        if (typeId) {
+            query = query.eq('vehicle_type_id', typeId);
+        }
+
+        const { data, error } = await query
             .order('condition_name', { ascending: true });
 
         if (error) throw error;

@@ -1,10 +1,11 @@
 import express from 'express';
-import { addReview, getReviewsByAdId, getReviewStats } from '../controllers/reviewController.js';
+import { addReview, getReviewsByAdId, getReviewStats, getAllReviews } from '../controllers/reviewController.js';
 import { protect } from '../middlewares/authMiddleware.js';
 
 const router = express.Router();
 
 // Public Routes
+router.get('/', getAllReviews);
 router.get('/:adId', getReviewsByAdId);
 router.get('/stats/:adId', getReviewStats);
 
