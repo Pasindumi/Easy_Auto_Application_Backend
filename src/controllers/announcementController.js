@@ -9,7 +9,7 @@ export const getActiveAnnouncements = async (req, res) => {
         const { data, error } = await supabase
             .from('announcements')
             .select('*')
-            .eq('is_active', true)
+            .eq('status', 'ACTIVE')
             .order('created_at', { ascending: false });
 
         if (error) {
@@ -50,11 +50,11 @@ export const getAnnouncements = async (req, res) => {
  * Create an announcement
  */
 export const createAnnouncement = async (req, res) => {
-    const { title, content, image_url, link, is_active } = req.body;
+    const { title, content, image_url, link, status } = req.body;
     try {
         const { data, error } = await supabase
             .from('announcements')
-            .insert([{ title, content, image_url, link, is_active: is_active ?? true }])
+            .insert([{ title, content, image_url, link, status: status ?? 'ACTIVE' }])
             .select()
             .single();
 
