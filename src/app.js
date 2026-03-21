@@ -18,6 +18,7 @@ import boostRoutes from "./routes/boostRoutes.js";
 import reviewRoutes from "./routes/reviewRoutes.js";
 import chatRoutes from "./routes/chatRoutes.js";
 import appReviewRoutes from "./routes/appReviewRoutes.js";
+import rentalRoutes from "./routes/rentalRoutes.js";
 import startCronJobs from "./utils/cronJobs.js";
 
 const app = express();
@@ -58,6 +59,7 @@ app.get("/", (req, res) => {
 // API Routes
 app.use("/api/auth", authRoutes); // Authentication routes
 app.use("/api/cars", carRoutes); // Car/Ads routes (has mixed public/protected)
+app.use("/api/rentals", rentalRoutes); // Rental Ads routes
 app.use("/api/admin", adminRoutes); // Admin routes
 app.use("/api/vehicle-config", vehicleConfigRoutes); // Vehicle configuration routes
 app.use("/api/pricing", pricingRoutes); // Pricing routes
