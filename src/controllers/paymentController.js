@@ -65,7 +65,8 @@ export const initiatePayment = async (req, res) => {
             city,
             country,
             packageId, // Optional
-            adId // Optional (for Boosts)
+            adId, // Optional (for Boosts/Sell Ads)
+            rentalAdId // Optional (for Rental Ads)
         } = req.body;
 
         console.log("--- PayHere Server-Side Initiation ---");
@@ -81,6 +82,7 @@ export const initiatePayment = async (req, res) => {
             user_id: userId,
             package_id: packageId || null,
             ad_id: adId || null,
+            rental_ad_id: rentalAdId || null,
             order_id: order_id,
             amount: amount,
             currency: currency || 'LKR',
@@ -145,7 +147,7 @@ export const initiatePayment = async (req, res) => {
                         <input type="hidden" name="country" value="${country || ''}" />
                         <input type="hidden" name="hash" value="${hash}" />
                         <input type="hidden" name="custom_1" value="${userId}" />
-                        <input type="hidden" name="custom_2" value="${packageId}" />
+                        <input type="hidden" name="custom_2" value="${packageId || rentalAdId || ''}" />
                     </form>
                     <div style="text-align:center">
                         <div class="loader" style="margin:0 auto 10px;"></div>
@@ -301,15 +303,37 @@ export const handlePaymentNotify = async (req, res) => {
             const packageId = custom_2;
 
             if (userId && packageId) {
-                // Fetch Payment Record to check for ad_id and differentiate Boost vs Subscription
-                // We need ad_id to distinguish boost packages.
+                // Fetch Payment Record to check for ad_id and differentiate Boost vs Subscription vs Rental
                 const { data: payRecord } = await supabase
                     .from('payments')
-                    .select('id, ad_id, package_id, price_items(item_type)')
+                    .select('id, ad_id, rental_ad_id, package_id, price_items(item_type)')
                     .eq('order_id', order_id)
                     .single();
 
-                if (payRecord && payRecord.price_items?.item_type === 'BOOST_PACKAGE') {
+                if (payRecord && payRecord.rental_ad_id) {
+                    // It's a Rental Ad Payment!
+                    console.log(`Applying Payment to Rental Ad ${payRecord.rental_ad_id}`);
+
+                    // 1. Activate the Rental Ad
+                    // Fetch duration days from the vehicle type linked to rental_ad, or default to 30
+                    const { data: rentAd } = await supabase
+                        .from('rental_ads')
+                        .select('vehicle_types(expiry_days)')
+                        .eq('id', payRecord.rental_ad_id)
+                        .single();
+
+                    const expiryDays = rentAd?.vehicle_types?.expiry_days || 30;
+                    const expiryDate = new Date();
+                    expiryDate.setDate(expiryDate.getDate() + expiryDays);
+
+                    await supabase
+                        .from('rental_ads')
+                        .update({ status: 'ACTIVE', expiry_date: expiryDate.toISOString() })
+                        .eq('id', payRecord.rental_ad_id);
+
+                    // 2. We can still apply package logic if they used a subscription/package
+                    // For now, if packageId is present, we log usage or apply subscription like normal
+                } else if (payRecord && payRecord.price_items?.item_type === 'BOOST_PACKAGE') {
                     // It's a Boost!
                     console.log(`Applying Boost Package ${packageId} to Ad ${payRecord.ad_id}`);
 
@@ -327,8 +351,7 @@ export const handlePaymentNotify = async (req, res) => {
                     await applyBoostToAd({
                         adId: payRecord.ad_id,
                         packageId: packageId,
-                        paymentId: payRecord.id, // We need payment ID, but payRecord only has ad_id... Wait, order_id is unique enough or I can fetch ID too.
-                        // Actually payRecord above didn't select ID. Let's select ID.
+                        paymentId: payRecord.id,
                         durationDays
                     });
 
@@ -365,7 +388,7 @@ export const handlePaymentNotify = async (req, res) => {
                     }
                 }
 
-                // Re-fetch payment ID for email if needed (or include in payRecord selection)
+                // Re-fetch payment ID for email if needed
                 const { data: completePayment } = await supabase.from('payments').select('id').eq('order_id', order_id).single();
 
                 if (completePayment) {
@@ -513,16 +536,19 @@ export const unsubscribeUser = async (req, res) => {
 export const activateFreeAdByPackage = async (req, res) => {
     try {
         const userId = req.user?.id;
-        const { adId, packageId, amount, orderId } = req.body;
+        const { adId, rentalAdId, packageId, amount, orderId } = req.body;
 
-        if (!adId || !packageId) {
+        if ((!adId && !rentalAdId) || !packageId) {
             return res.status(400).json({ success: false, message: "Missing required parameters." });
         }
 
         // 1. Verify Slot Availability (Security Check)
         // We'll manually check the usage for this specific ad's vehicle type
+        const targetId = adId || rentalAdId;
+        const tableName = rentalAdId ? 'rental_ads' : 'CarAd';
+
         const { data: ad, error: adError } = await supabase
-            .from('CarAd')
+            .from(tableName)
             .select(`
                 vehicle_type_id, 
                 seller_id, 
@@ -530,7 +556,7 @@ export const activateFreeAdByPackage = async (req, res) => {
                 vehicle_types (type_name, expiry_days)
             `)
 
-            .eq('id', adId)
+            .eq('id', targetId)
             .single();
 
         if (adError || !ad) {
@@ -636,6 +662,8 @@ export const activateFreeAdByPackage = async (req, res) => {
                 user_id: userId,
                 package_id: packageId,
                 order_id: generatedOrderId,
+                ad_id: adId || null,
+                rental_ad_id: rentalAdId || null,
                 amount: amount || 0,
                 currency: 'LKR',
                 status: 'SUCCESS',
@@ -656,13 +684,13 @@ export const activateFreeAdByPackage = async (req, res) => {
         expiryDate.setDate(expiryDate.getDate() + expiryDays);
 
         const { error: updateError } = await supabase
-            .from('CarAd')
+            .from(tableName)
             .update({
                 status: 'ACTIVE',
                 expiry_date: expiryDate.toISOString(),
             })
 
-            .eq('id', adId);
+            .eq('id', targetId);
 
         if (updateError) {
             console.error("Ad Activation Error:", updateError);
