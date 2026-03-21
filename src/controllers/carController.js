@@ -415,33 +415,50 @@ export const getTrendingAds = async (req, res) => {
         // 4. Take top 10 (or limit)
         const topAdIds = sortedAdIds.slice(0, 10);
 
+        let orderedAds = [];
+
         if (topAdIds.length === 0) {
-            return res.json({ success: true, data: [] });
+            // Fallback to latest ACTIVE ads if no reviews exist
+            const { data: fallbackAds, error: fallbackError } = await supabase
+                .from("CarAd")
+                .select(`
+                    *,
+                    CarDetails!inner(*),
+                    AdImage(*),
+                    vehicle_type:vehicle_types(type_name)
+                `)
+                .eq("status", "ACTIVE")
+                .order('created_at', { ascending: false })
+                .limit(10);
+
+            if (fallbackError) throw fallbackError;
+
+            orderedAds = fallbackAds ? fallbackAds.map(ad => ({ ...ad, review_count: 0 })) : [];
+        } else {
+            // 5. Fetch the actual ads
+            const { data: ads, error: adError } = await supabase
+                .from("CarAd")
+                .select(`
+                    *,
+                    CarDetails!inner(*),
+                    AdImage(*),
+                    vehicle_type:vehicle_types(type_name)
+                `)
+                .in('id', topAdIds)
+                .eq("status", "ACTIVE");
+
+            if (adError) throw adError;
+
+            // 6. Preserve order (since .in() doesn't guarantee order)
+            // and attach review count
+            orderedAds = topAdIds
+                .map(id => ads.find(ad => ad.id === id))
+                .filter(Boolean)
+                .map(ad => ({
+                    ...ad,
+                    review_count: adCounts[ad.id]
+                }));
         }
-
-        // 5. Fetch the actual ads
-        const { data: ads, error: adError } = await supabase
-            .from("CarAd")
-            .select(`
-                *,
-                CarDetails!inner(*),
-                AdImage(*),
-                vehicle_type:vehicle_types(type_name)
-            `)
-            .in('id', topAdIds)
-            .eq("status", "ACTIVE");
-
-        if (adError) throw adError;
-
-        // 6. Preserve order (since .in() doesn't guarantee order)
-        // and attach review count
-        const orderedAds = topAdIds
-            .map(id => ads.find(ad => ad.id === id))
-            .filter(Boolean) // Remove if not found (e.g. inactive)
-            .map(ad => ({
-                ...ad,
-                review_count: adCounts[ad.id]
-            }));
 
         res.json({ success: true, data: orderedAds });
 
