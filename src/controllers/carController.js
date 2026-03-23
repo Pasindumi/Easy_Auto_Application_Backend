@@ -745,8 +745,8 @@ export const getAdById = async (req, res) => {
             }
         }
 
-        // Increment view count
-        const newCount = (adData.views_count || 0) + 1;
+        // Increment view count (1 view counts as 2 as per user request)
+        const newCount = (adData.views_count || 0) + 2;
         await supabase.from("CarAd").update({ views_count: newCount }).eq('id', id);
 
         const responseData = {
@@ -1099,6 +1099,15 @@ export const deleteAd = async (req, res) => {
 
         // Delete Boosts (if any)
         await supabase.from("ad_boosts").delete().eq("ad_id", adId);
+
+        // Nullify ad_id in payments (Preserves history while allowing ad deletion)
+        await supabase.from("payments").update({ ad_id: null }).eq("ad_id", adId);
+
+        // Delete from Wishlist
+        await supabase.from("wishlist").delete().eq("ad_id", adId);
+
+        // Delete from Reviews
+        await supabase.from("reviews").delete().eq("ad_id", adId);
 
         // 3. Finally delete the CarAd record
         const { error: deleteError } = await supabase

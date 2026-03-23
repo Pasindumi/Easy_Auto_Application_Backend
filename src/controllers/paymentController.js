@@ -171,7 +171,7 @@ export const initiatePayment = async (req, res) => {
  */
 export const mockPaymentSuccess = async (req, res) => {
     try {
-        const { userId, packageId, amount, orderId, planName } = req.body;
+        const { userId, packageId, amount, orderId, planName, adId } = req.body;
 
         if (!userId || !packageId || !amount) {
             return res.status(400).json({ success: false, message: "Missing required parameters." });
@@ -185,6 +185,7 @@ export const mockPaymentSuccess = async (req, res) => {
             .insert({
                 user_id: userId,
                 package_id: packageId,
+                ad_id: adId || null,
                 order_id: generatedOrderId,
                 amount: amount,
                 currency: 'LKR',
@@ -210,25 +211,41 @@ export const mockPaymentSuccess = async (req, res) => {
 
         const durationDays = featData ? parseInt(featData.feature_value) : 30;
 
-        // 3. Create Active Subscription
-        const startDate = new Date();
-        const endDate = new Date();
-        endDate.setDate(startDate.getDate() + (isNaN(durationDays) ? 30 : durationDays));
+        // 3. Handle Boost vs Subscription
+        // Fetch price item to check type
+        const { data: pkgData } = await supabase.from('price_items').select('item_type').eq('id', packageId).single();
 
-        const { error: subError } = await supabase
-            .from('user_subscriptions')
-            .insert({
-                user_id: userId,
-                package_id: packageId,
-                payment_id: payData.id,
-                start_date: startDate.toISOString(),
-                end_date: endDate.toISOString(),
-                status: 'ACTIVE'
+        if (pkgData?.item_type === 'BOOST_PACKAGE' && adId) {
+            // It's a boost!
+            const { applyBoostToAd } = await import('./boostController.js');
+            await applyBoostToAd({
+                adId: adId,
+                packageId: packageId,
+                paymentId: payData.id,
+                durationDays
             });
+            console.log(`Boost Package ${packageId} mock-applied to Ad ${adId}`);
+        } else {
+            // Regular Subscription
+            const startDate = new Date();
+            const endDate = new Date();
+            endDate.setDate(startDate.getDate() + (isNaN(durationDays) ? 30 : durationDays));
 
-        if (subError) {
-            console.error("Mock Subscription Insert Error:", subError);
-            return res.status(500).json({ success: false, message: "Failed to create subscription." });
+            const { error: subError } = await supabase
+                .from('user_subscriptions')
+                .insert({
+                    user_id: userId,
+                    package_id: packageId,
+                    payment_id: payData.id,
+                    start_date: startDate.toISOString(),
+                    end_date: endDate.toISOString(),
+                    status: 'ACTIVE'
+                });
+
+            if (subError) {
+                console.error("Mock Subscription Insert Error:", subError);
+                return res.status(500).json({ success: false, message: "Failed to create subscription." });
+            }
         }
 
         // 4. Send Email Notification
@@ -436,9 +453,12 @@ export const getMyPayments = async (req, res) => {
             date: new Date(p.created_at).toLocaleDateString(),
             plan: p.price_items?.name || 'Unknown Package',
             amount: `${p.currency} ${p.amount}`,
+            rawAmount: p.amount,
             status: p.status,
             orderId: p.order_id,
-            packageId: p.package_id // Ensure package_id is passed
+            packageId: p.package_id,
+            adId: p.ad_id,
+            rentalAdId: p.rental_ad_id
         }));
 
         return res.json({ success: true, data: formatted });
