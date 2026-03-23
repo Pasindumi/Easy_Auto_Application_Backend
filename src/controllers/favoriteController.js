@@ -31,6 +31,16 @@ export const toggleFavorite = async (req, res) => {
 
             if (deleteError) throw deleteError;
 
+            // Decrement likes_count in CarAd
+            await supabase.rpc('decrement_likes_count', { ad_id_param: ad_id });
+            // Fallback if RPC doesn't exist (though RPC is safer for concurrency)
+            // await supabase.from('CarAd').update({ likes_count: supabase.raw('likes_count - 1') }).eq('id', ad_id);
+            // Since I don't know if RPC exists, I'll use a standard update with current value or a safe increment if possible.
+            // Supabase doesn't have a direct "increment" in JS client without RPC easily but we can fetch and update.
+            const { data: adData } = await supabase.from('CarAd').select('likes_count').eq('id', ad_id).single();
+            const newLikes = Math.max(0, (adData?.likes_count || 1) - 1);
+            await supabase.from('CarAd').update({ likes_count: newLikes }).eq('id', ad_id);
+
             return res.json({ success: true, isFavorite: false, message: "Removed from wishlist" });
         } else {
             // Add to wishlist
@@ -39,6 +49,11 @@ export const toggleFavorite = async (req, res) => {
                 .insert([{ user_id, ad_id }]);
 
             if (insertError) throw insertError;
+
+            // Increment likes_count in CarAd
+            const { data: adData } = await supabase.from('CarAd').select('likes_count').eq('id', ad_id).single();
+            const newLikes = (adData?.likes_count || 0) + 1;
+            await supabase.from('CarAd').update({ likes_count: newLikes }).eq('id', ad_id);
 
             return res.status(201).json({ success: true, isFavorite: true, message: "Added to wishlist" });
         }

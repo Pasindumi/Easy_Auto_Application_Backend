@@ -14,6 +14,15 @@ import {
     forgotPassword,
     verifyOTP,
     resetPassword,
+    changePassword,
+    getSessions,
+    getSecurityAlerts,
+    requestEmailChange,
+    verifyEmailChange,
+    requestPhoneChange,
+    verifyPhoneChange,
+    enable2FA,
+    disable2FA
 } from '../controllers/authController.js';
 import { protect } from '../middlewares/authMiddleware.js';
 
@@ -48,5 +57,18 @@ router.post('/login', login);
 router.post('/forgot', forgotPassword);
 router.post('/verify-otp', verifyOTP);
 router.post('/reset-password', resetPassword);
+
+// ============================================
+// SECURITY SETTINGS
+// ============================================
+router.post('/change-password', protect, changePassword);
+router.get('/sessions', protect, getSessions);
+router.get('/security-alerts', protect, getSecurityAlerts);
+router.post('/email/request', protect, requestEmailChange);
+router.post('/email/verify', protect, verifyEmailChange);
+router.post('/phone/request', protect, requestPhoneChange);
+router.post('/phone/verify', protect, verifyPhoneChange);
+router.post('/2fa/enable', protect, enable2FA);
+router.post('/2fa/disable', protect, disable2FA);
 
 export default router;
