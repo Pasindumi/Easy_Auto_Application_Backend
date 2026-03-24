@@ -18,7 +18,7 @@ export const getDiscounts = async (req, res) => {
             .order('created_at', { ascending: false });
 
         if (error) throw error;
-        res.json(data);
+        res.json({ success: true, data });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -44,9 +44,9 @@ export const getDiscount = async (req, res) => {
             .single();
 
         if (error) throw error;
-        if (!data) return res.status(404).json({ error: 'Discount not found' });
+        if (!data) return res.status(404).json({ success: false, error: 'Discount not found' });
 
-        res.json(data);
+        res.json({ success: true, data });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }

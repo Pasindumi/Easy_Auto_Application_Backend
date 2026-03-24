@@ -2,8 +2,8 @@ import express from 'express';
 import multer from 'multer';
 import {
     updateUserDetails,
-    deleteUser,
-    getUserStats
+    getUserById,
+    deleteUser
 } from '../controllers/userController.js';
 import { protect } from '../middlewares/authMiddleware.js';
 
@@ -15,19 +15,13 @@ const upload = multer({ storage: multer.memoryStorage() });
 // ============================================
 
 /**
- * GET /api/users/stats
- * Get user dashboard statistics
- * @returns {Object} { ads: number, saved: number, views: number }
- */
-router.get('/stats', protect, getUserStats);
-
-/**
  * PUT /api/users/:id
  * Update user details (name, email, phone) and profile picture
  * @param {string} id - User ID (from URL parameter)
  * @body {Object} Updated user data (name, email, phone) and optional image file
  * @returns {Object} Updated user details with avatar URL
  */
+router.get('/:id', getUserById);
 router.put('/:id', protect, upload.any(), updateUserDetails);
 
 /**

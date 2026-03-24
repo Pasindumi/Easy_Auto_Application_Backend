@@ -65,7 +65,8 @@ export const initiatePayment = async (req, res) => {
             city,
             country,
             packageId, // Optional
-            adId // Optional (for Boosts)
+            adId, // Optional (for Boosts/Sell Ads)
+            rentalAdId // Optional (for Rental Ads)
         } = req.body;
 
         console.log("--- PayHere Server-Side Initiation ---");
@@ -81,6 +82,7 @@ export const initiatePayment = async (req, res) => {
             user_id: userId,
             package_id: packageId || null,
             ad_id: adId || null,
+            rental_ad_id: rentalAdId || null,
             order_id: order_id,
             amount: amount,
             currency: currency || 'LKR',
@@ -145,7 +147,7 @@ export const initiatePayment = async (req, res) => {
                         <input type="hidden" name="country" value="${country || ''}" />
                         <input type="hidden" name="hash" value="${hash}" />
                         <input type="hidden" name="custom_1" value="${userId}" />
-                        <input type="hidden" name="custom_2" value="${packageId}" />
+                        <input type="hidden" name="custom_2" value="${packageId || rentalAdId || ''}" />
                     </form>
                     <div style="text-align:center">
                         <div class="loader" style="margin:0 auto 10px;"></div>
@@ -169,7 +171,7 @@ export const initiatePayment = async (req, res) => {
  */
 export const mockPaymentSuccess = async (req, res) => {
     try {
-        const { userId, packageId, amount, orderId, planName } = req.body;
+        const { userId, packageId, amount, orderId, planName, adId } = req.body;
 
         if (!userId || !packageId || !amount) {
             return res.status(400).json({ success: false, message: "Missing required parameters." });
@@ -183,6 +185,7 @@ export const mockPaymentSuccess = async (req, res) => {
             .insert({
                 user_id: userId,
                 package_id: packageId,
+                ad_id: adId || null,
                 order_id: generatedOrderId,
                 amount: amount,
                 currency: 'LKR',
@@ -208,25 +211,41 @@ export const mockPaymentSuccess = async (req, res) => {
 
         const durationDays = featData ? parseInt(featData.feature_value) : 30;
 
-        // 3. Create Active Subscription
-        const startDate = new Date();
-        const endDate = new Date();
-        endDate.setDate(startDate.getDate() + (isNaN(durationDays) ? 30 : durationDays));
+        // 3. Handle Boost vs Subscription
+        // Fetch price item to check type
+        const { data: pkgData } = await supabase.from('price_items').select('item_type').eq('id', packageId).single();
 
-        const { error: subError } = await supabase
-            .from('user_subscriptions')
-            .insert({
-                user_id: userId,
-                package_id: packageId,
-                payment_id: payData.id,
-                start_date: startDate.toISOString(),
-                end_date: endDate.toISOString(),
-                status: 'ACTIVE'
+        if (pkgData?.item_type === 'BOOST_PACKAGE' && adId) {
+            // It's a boost!
+            const { applyBoostToAd } = await import('./boostController.js');
+            await applyBoostToAd({
+                adId: adId,
+                packageId: packageId,
+                paymentId: payData.id,
+                durationDays
             });
+            console.log(`Boost Package ${packageId} mock-applied to Ad ${adId}`);
+        } else {
+            // Regular Subscription
+            const startDate = new Date();
+            const endDate = new Date();
+            endDate.setDate(startDate.getDate() + (isNaN(durationDays) ? 30 : durationDays));
 
-        if (subError) {
-            console.error("Mock Subscription Insert Error:", subError);
-            return res.status(500).json({ success: false, message: "Failed to create subscription." });
+            const { error: subError } = await supabase
+                .from('user_subscriptions')
+                .insert({
+                    user_id: userId,
+                    package_id: packageId,
+                    payment_id: payData.id,
+                    start_date: startDate.toISOString(),
+                    end_date: endDate.toISOString(),
+                    status: 'ACTIVE'
+                });
+
+            if (subError) {
+                console.error("Mock Subscription Insert Error:", subError);
+                return res.status(500).json({ success: false, message: "Failed to create subscription." });
+            }
         }
 
         // 4. Send Email Notification
@@ -301,15 +320,37 @@ export const handlePaymentNotify = async (req, res) => {
             const packageId = custom_2;
 
             if (userId && packageId) {
-                // Fetch Payment Record to check for ad_id and differentiate Boost vs Subscription
-                // We need ad_id to distinguish boost packages.
+                // Fetch Payment Record to check for ad_id and differentiate Boost vs Subscription vs Rental
                 const { data: payRecord } = await supabase
                     .from('payments')
-                    .select('id, ad_id, package_id, price_items(item_type)')
+                    .select('id, ad_id, rental_ad_id, package_id, price_items(item_type)')
                     .eq('order_id', order_id)
                     .single();
 
-                if (payRecord && payRecord.price_items?.item_type === 'BOOST_PACKAGE') {
+                if (payRecord && payRecord.rental_ad_id) {
+                    // It's a Rental Ad Payment!
+                    console.log(`Applying Payment to Rental Ad ${payRecord.rental_ad_id}`);
+
+                    // 1. Activate the Rental Ad
+                    // Fetch duration days from the vehicle type linked to rental_ad, or default to 30
+                    const { data: rentAd } = await supabase
+                        .from('rental_ads')
+                        .select('vehicle_types(expiry_days)')
+                        .eq('id', payRecord.rental_ad_id)
+                        .single();
+
+                    const expiryDays = rentAd?.vehicle_types?.expiry_days || 30;
+                    const expiryDate = new Date();
+                    expiryDate.setDate(expiryDate.getDate() + expiryDays);
+
+                    await supabase
+                        .from('rental_ads')
+                        .update({ status: 'ACTIVE', expiry_date: expiryDate.toISOString() })
+                        .eq('id', payRecord.rental_ad_id);
+
+                    // 2. We can still apply package logic if they used a subscription/package
+                    // For now, if packageId is present, we log usage or apply subscription like normal
+                } else if (payRecord && payRecord.price_items?.item_type === 'BOOST_PACKAGE') {
                     // It's a Boost!
                     console.log(`Applying Boost Package ${packageId} to Ad ${payRecord.ad_id}`);
 
@@ -327,8 +368,7 @@ export const handlePaymentNotify = async (req, res) => {
                     await applyBoostToAd({
                         adId: payRecord.ad_id,
                         packageId: packageId,
-                        paymentId: payRecord.id, // We need payment ID, but payRecord only has ad_id... Wait, order_id is unique enough or I can fetch ID too.
-                        // Actually payRecord above didn't select ID. Let's select ID.
+                        paymentId: payRecord.id,
                         durationDays
                     });
 
@@ -365,7 +405,7 @@ export const handlePaymentNotify = async (req, res) => {
                     }
                 }
 
-                // Re-fetch payment ID for email if needed (or include in payRecord selection)
+                // Re-fetch payment ID for email if needed
                 const { data: completePayment } = await supabase.from('payments').select('id').eq('order_id', order_id).single();
 
                 if (completePayment) {
@@ -413,9 +453,12 @@ export const getMyPayments = async (req, res) => {
             date: new Date(p.created_at).toLocaleDateString(),
             plan: p.price_items?.name || 'Unknown Package',
             amount: `${p.currency} ${p.amount}`,
+            rawAmount: p.amount,
             status: p.status,
             orderId: p.order_id,
-            packageId: p.package_id // Ensure package_id is passed
+            packageId: p.package_id,
+            adId: p.ad_id,
+            rentalAdId: p.rental_ad_id
         }));
 
         return res.json({ success: true, data: formatted });
@@ -513,16 +556,19 @@ export const unsubscribeUser = async (req, res) => {
 export const activateFreeAdByPackage = async (req, res) => {
     try {
         const userId = req.user?.id;
-        const { adId, packageId, amount, orderId } = req.body;
+        const { adId, rentalAdId, packageId, amount, orderId } = req.body;
 
-        if (!adId || !packageId) {
+        if ((!adId && !rentalAdId) || !packageId) {
             return res.status(400).json({ success: false, message: "Missing required parameters." });
         }
 
         // 1. Verify Slot Availability (Security Check)
         // We'll manually check the usage for this specific ad's vehicle type
+        const targetId = adId || rentalAdId;
+        const tableName = rentalAdId ? 'rental_ads' : 'CarAd';
+
         const { data: ad, error: adError } = await supabase
-            .from('CarAd')
+            .from(tableName)
             .select(`
                 vehicle_type_id, 
                 seller_id, 
@@ -530,7 +576,7 @@ export const activateFreeAdByPackage = async (req, res) => {
                 vehicle_types (type_name, expiry_days)
             `)
 
-            .eq('id', adId)
+            .eq('id', targetId)
             .single();
 
         if (adError || !ad) {
@@ -545,43 +591,85 @@ export const activateFreeAdByPackage = async (req, res) => {
             return res.status(400).json({ success: false, message: "Ad is already active." });
         }
 
-        // Check if package has limits for this type
-        const { data: limit, error: lError } = await supabase
-            .from('package_ad_limits')
+        // 1.5 Global Slot Availability Check
+        const { data: globalFeatures } = await supabase
+            .from('package_features')
             .select('*')
-            .eq('package_id', packageId)
-            .eq('vehicle_type_id', ad.vehicle_type_id)
-            .single();
+            .eq('price_item_id', packageId);
 
-        if (!lError && limit && !limit.is_unlimited) {
-            // Get current usage in this subscription
-            const { data: sub } = await supabase
-                .from('user_subscriptions')
-                .select('start_date')
-                .eq('user_id', userId)
-                .eq('package_id', packageId)
-                .eq('status', 'ACTIVE')
-                .single();
+        const globalConfig = {};
+        if (globalFeatures) {
+            globalFeatures.forEach(f => globalConfig[f.feature_key] = f.feature_value);
+        }
 
-            if (sub) {
-                const typeName = ad.vehicle_types?.type_name || 'Other';
-                const typeOrderIdPrefix = `V-${typeName}`;
+        if (globalConfig.FREE_ADS_LIMIT || globalConfig.IS_UNLIMITED_ADS) {
+            const isUnlimited = globalConfig.IS_UNLIMITED_ADS === 'true' || globalConfig.IS_UNLIMITED_ADS === true;
+            if (!isUnlimited) {
+                const limitVal = parseInt(globalConfig.FREE_ADS_LIMIT) || 0;
 
-                // Count how many tracking records exist for this package and SPECIFIC vehicle type in this period
-                const { count } = await supabase
-                    .from('payments')
-                    .select('*', { count: 'exact', head: true })
+                // Get current usage in this subscription
+                const { data: sub } = await supabase
+                    .from('user_subscriptions')
+                    .select('start_date')
                     .eq('user_id', userId)
                     .eq('package_id', packageId)
-                    .eq('status', 'SUCCESS')
-                    .eq('order_id', typeOrderIdPrefix)
-                    .gte('created_at', sub.start_date);
+                    .eq('status', 'ACTIVE')
+                    .single();
 
-                if (count >= limit.quantity) {
-                    return res.status(400).json({ success: false, message: "Package ad posting limit reached for this vehicle type." });
+                if (sub) {
+                    const { count: totalCount } = await supabase
+                        .from('payments')
+                        .select('*', { count: 'exact', head: true })
+                        .eq('user_id', userId)
+                        .eq('package_id', packageId)
+                        .eq('status', 'SUCCESS')
+                        .like('order_id', 'V-%')
+                        .gte('created_at', sub.start_date);
+
+                    if (totalCount >= limitVal) {
+                        return res.status(400).json({ success: false, message: "Total package ad posting limit reached." });
+                    }
                 }
             }
+            // If global limit is checked or is unlimited, we skip the per-type check below
+        } else {
+            // Check if package has limits for this type (Legacy Per-Type Logic)
+            const { data: limit, error: lError } = await supabase
+                .from('package_ad_limits')
+                .select('*')
+                .eq('package_id', packageId)
+                .eq('vehicle_type_id', ad.vehicle_type_id)
+                .single();
 
+            if (!lError && limit && !limit.is_unlimited) {
+                // Get current usage in this subscription
+                const { data: sub } = await supabase
+                    .from('user_subscriptions')
+                    .select('start_date')
+                    .eq('user_id', userId)
+                    .eq('package_id', packageId)
+                    .eq('status', 'ACTIVE')
+                    .single();
+
+                if (sub) {
+                    const typeName = ad.vehicle_types?.type_name || 'Other';
+                    const typeOrderIdPrefix = `V-${typeName}`;
+
+                    // Count how many tracking records exist for this package and SPECIFIC vehicle type in this period
+                    const { count } = await supabase
+                        .from('payments')
+                        .select('*', { count: 'exact', head: true })
+                        .eq('user_id', userId)
+                        .eq('package_id', packageId)
+                        .eq('status', 'SUCCESS')
+                        .eq('order_id', typeOrderIdPrefix)
+                        .gte('created_at', sub.start_date);
+
+                    if (count >= limit.quantity) {
+                        return res.status(400).json({ success: false, message: "Package ad posting limit reached for this vehicle type." });
+                    }
+                }
+            }
         }
 
         const typeName = ad.vehicle_types?.type_name || 'Other';
@@ -594,6 +682,8 @@ export const activateFreeAdByPackage = async (req, res) => {
                 user_id: userId,
                 package_id: packageId,
                 order_id: generatedOrderId,
+                ad_id: adId || null,
+                rental_ad_id: rentalAdId || null,
                 amount: amount || 0,
                 currency: 'LKR',
                 status: 'SUCCESS',
@@ -614,13 +704,13 @@ export const activateFreeAdByPackage = async (req, res) => {
         expiryDate.setDate(expiryDate.getDate() + expiryDays);
 
         const { error: updateError } = await supabase
-            .from('CarAd')
+            .from(tableName)
             .update({
                 status: 'ACTIVE',
                 expiry_date: expiryDate.toISOString(),
             })
 
-            .eq('id', adId);
+            .eq('id', targetId);
 
         if (updateError) {
             console.error("Ad Activation Error:", updateError);

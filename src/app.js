@@ -1,11 +1,6 @@
 import express from "express";
 import cors from "cors";
 import morgan from "morgan";
-import dotenv from "dotenv";
-dotenv.config();
-
-console.log("CLERK_PUBLISHABLE_KEY exists:", !!process.env.CLERK_PUBLISHABLE_KEY);
-
 import { clerkMiddleware } from "@clerk/express";
 import authRoutes from "./routes/authRoutes.js";
 import carRoutes from "./routes/carRoutes.js";
@@ -13,6 +8,7 @@ import adminRoutes from "./routes/adminRoutes.js";
 import vehicleConfigRoutes from "./routes/vehicleConfigRoutes.js";
 import pricingRoutes from "./routes/pricingRoutes.js";
 import discountsRoutes from "./routes/discountsRoutes.js";
+import announcementRoutes from "./routes/announcementRoutes.js";
 import paymentRoutes from "./routes/paymentRoutes.js";
 import userRoutes from "./routes/userRoutes.js";
 import reportRoutes from "./routes/reportRoutes.js";
@@ -20,12 +16,29 @@ import favoriteRoutes from "./routes/favoriteRoutes.js";
 import complaintRoutes from "./routes/complaintRoutes.js";
 import boostRoutes from "./routes/boostRoutes.js";
 import reviewRoutes from "./routes/reviewRoutes.js";
-import announcementRoutes from "./routes/announcementRoutes.js";
+import chatRoutes from "./routes/chatRoutes.js";
+import appReviewRoutes from "./routes/appReviewRoutes.js";
+import rentalRoutes from "./routes/rentalRoutes.js";
 import startCronJobs from "./utils/cronJobs.js";
 
 const app = express();
 
-app.use(cors());
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(",")
+  : ["http://localhost:3000", "http://localhost:5173", "http://localhost:19006"];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV === "development") {
+      callback(null, true);
+    } else {
+      callback(new Error("Not allowed by CORS"));
+    }
+  },
+  credentials: true,
+}));
 app.use(express.json());
 app.use(morgan("dev"));
 
@@ -46,10 +59,12 @@ app.get("/", (req, res) => {
 // API Routes
 app.use("/api/auth", authRoutes); // Authentication routes
 app.use("/api/cars", carRoutes); // Car/Ads routes (has mixed public/protected)
+app.use("/api/rentals", rentalRoutes); // Rental Ads routes
 app.use("/api/admin", adminRoutes); // Admin routes
 app.use("/api/vehicle-config", vehicleConfigRoutes); // Vehicle configuration routes
 app.use("/api/pricing", pricingRoutes); // Pricing routes
 app.use("/api/discounts", discountsRoutes); // Discounts routes
+app.use("/api/announcements", announcementRoutes); // Announcements routes
 app.use("/api/payment", paymentRoutes); // Payment routes
 app.use("/api/users", userRoutes); // User routes
 app.use("/api/reports", reportRoutes); // Ad report routes
@@ -57,8 +72,8 @@ app.use("/api/favorites", favoriteRoutes); // Favorite routes
 app.use("/api/complaints", complaintRoutes); // Complaints routes
 app.use("/api/boosts", boostRoutes); // Boost routes
 app.use("/api/reviews", reviewRoutes); // Review routes
-app.use("/api/app-reviews", reviewRoutes); 
-app.use("/api/announcements", announcementRoutes); // Announcement routes
+app.use("/api/chat", chatRoutes); // Chat routes
+app.use("/api/app-reviews", appReviewRoutes); // App Review routes
 
 // Start Cron Jobs
 startCronJobs();

@@ -82,6 +82,26 @@ const sanitizeUser = (user) => {
     return sanitized;
 };
 
+/**
+ * Log security related events
+ */
+const createSecurityLog = async (userId, action, details, req) => {
+    try {
+        const ipAddress = req.ip || req.headers['x-forwarded-for'] || 'Unknown';
+        await supabase
+            .from('security_logs')
+            .insert([{
+                user_id: userId,
+                action,
+                details,
+                ip_address: ipAddress,
+                created_at: new Date().toISOString()
+            }]);
+    } catch (error) {
+        console.error('❌ Error creating security log:', error);
+    }
+};
+
 // ============================================
 // CLERK SOCIAL AUTHENTICATION
 // ============================================
@@ -354,7 +374,16 @@ export const clerkAuth = async (req, res) => {
                 avatar: sanitizedUser.avatar,
                 role: sanitizedUser.role,
                 is_premium: sanitizedUser.is_premium || false,
-                auth_provider: sanitizedUser.auth_provider
+                auth_provider: sanitizedUser.auth_provider,
+                bio: sanitizedUser.bio,
+                location: sanitizedUser.location,
+                gender: sanitizedUser.gender,
+                birthday: sanitizedUser.birthday,
+                address_line1: sanitizedUser.address_line1,
+                address_line2: sanitizedUser.address_line2,
+                city: sanitizedUser.city,
+                district: sanitizedUser.district,
+                postal_code: sanitizedUser.postal_code
             }
         });
 
@@ -394,7 +423,7 @@ export const getCurrentUser = async (req, res) => {
         // Get fresh user data
         const { data: user, error } = await supabase
             .from('users')
-            .select('id, email, phone, name, role, avatar, is_premium, auth_provider, last_login')
+            .select('id, email, phone, name, role, avatar, is_premium, auth_provider, last_login, bio, location, gender, birthday, address_line1, address_line2, city, district, postal_code')
             .eq('id', userId)
             .single();
 
@@ -415,7 +444,16 @@ export const getCurrentUser = async (req, res) => {
                 role: user.role,
                 is_premium: user.is_premium,
                 auth_provider: user.auth_provider,
-                last_login: user.last_login
+                last_login: user.last_login,
+                bio: user.bio,
+                location: user.location,
+                gender: user.gender,
+                birthday: user.birthday,
+                address_line1: user.address_line1,
+                address_line2: user.address_line2,
+                city: user.city,
+                district: user.district,
+                postal_code: user.postal_code
             }
         });
 
@@ -475,6 +513,7 @@ export const logout = async (req, res) => {
 
         // Revoke refresh token
         await jwtService.revokeRefreshToken(userId, refreshToken);
+        await createSecurityLog(userId, 'LOGOUT', 'User logged out', req);
 
         res.status(200).json({ message: 'Logout successful' });
 
@@ -498,6 +537,7 @@ export const logoutAll = async (req, res) => {
 
         // Revoke all refresh tokens
         await jwtService.revokeAllRefreshTokens(userId);
+        await createSecurityLog(userId, 'LOGOUT', 'User logged out from all devices', req);
 
         res.status(200).json({ message: 'Logged out from all devices' });
 
@@ -608,6 +648,9 @@ export const signup = async (req, res) => {
 
         console.log('✅ New user created:', newUser.id, newUser.email);
 
+        // Log signup event
+        await createSecurityLog(newUser.id, 'SIGNUP', 'New user account created', req);
+
         // Generate backend JWT access and refresh tokens
         const tokens = await jwtService.generateTokenPair(newUser);
 
@@ -629,7 +672,16 @@ export const signup = async (req, res) => {
                 avatar: sanitizedUser.avatar,
                 role: sanitizedUser.role,
                 is_premium: sanitizedUser.is_premium || false,
-                auth_provider: sanitizedUser.auth_provider
+                auth_provider: sanitizedUser.auth_provider,
+                bio: sanitizedUser.bio,
+                location: sanitizedUser.location,
+                gender: sanitizedUser.gender,
+                birthday: sanitizedUser.birthday,
+                address_line1: sanitizedUser.address_line1,
+                address_line2: sanitizedUser.address_line2,
+                city: sanitizedUser.city,
+                district: sanitizedUser.district,
+                postal_code: sanitizedUser.postal_code
             }
         });
 
@@ -706,6 +758,9 @@ export const login = async (req, res) => {
 
         console.log('✅ User logged in:', user.id, user.email);
 
+        // Log login event
+        await createSecurityLog(user.id, 'LOGIN', 'User logged in successfully', req);
+
         // Update last login timestamp (non-blocking)
         try {
             await supabase
@@ -768,7 +823,16 @@ export const login = async (req, res) => {
                 avatar: sanitizedUser.avatar,
                 role: sanitizedUser.role,
                 is_premium: sanitizedUser.is_premium || false,
-                auth_provider: sanitizedUser.auth_provider
+                auth_provider: sanitizedUser.auth_provider,
+                bio: sanitizedUser.bio,
+                location: sanitizedUser.location,
+                gender: sanitizedUser.gender,
+                birthday: sanitizedUser.birthday,
+                address_line1: sanitizedUser.address_line1,
+                address_line2: sanitizedUser.address_line2,
+                city: sanitizedUser.city,
+                district: sanitizedUser.district,
+                postal_code: sanitizedUser.postal_code
             }
         });
 
@@ -1149,6 +1213,305 @@ export const resetPassword = async (req, res) => {
         res.status(500).json({
             error: 'Server error. Please try again later.'
         });
+    }
+};
+
+
+// ============================================
+// SECURITY SETTINGS
+// ============================================
+
+/**
+ * Change User Password
+ * POST /auth/change-password
+ */
+export const changePassword = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { currentPassword, newPassword } = req.body;
+
+        if (!currentPassword || !newPassword) {
+            return res.status(400).json({ error: 'Current and new passwords are required' });
+        }
+
+        // Get user for password verification
+        const { data: user, error } = await supabase
+            .from('users')
+            .select('password')
+            .eq('id', userId)
+            .single();
+
+        if (error || !user || !user.password) {
+            return res.status(401).json({ error: 'Unauthorized or password login not supported' });
+        }
+
+        // Verify current password
+        const isMatch = await bcrypt.compare(currentPassword, user.password);
+        if (!isMatch) {
+            return res.status(401).json({ error: 'Incorrect current password' });
+        }
+
+        // Hash new password
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(newPassword, salt);
+
+        // Update password
+        const { error: updateError } = await supabase
+            .from('users')
+            .update({ password: hashedPassword })
+            .eq('id', userId);
+
+        if (updateError) throw updateError;
+
+        await createSecurityLog(userId, 'PASSWORD_CHANGE', 'User changed their password', req);
+
+        res.status(200).json({ success: true, message: 'Password changed successfully' });
+    } catch (error) {
+        console.error('❌ Change Password Error:', error);
+        res.status(500).json({ error: 'Failed to change password' });
+    }
+};
+
+/**
+ * Get Active Sessions
+ * GET /auth/sessions
+ */
+export const getSessions = async (req, res) => {
+    try {
+        const userId = req.user.id;
+
+        const { data: sessions, error } = await supabase
+            .from('refresh_tokens')
+            .select('id, device_name, ip_address, last_active_at, created_at')
+            .eq('user_id', userId)
+            .eq('revoked', false)
+            .gt('expires_at', new Date().toISOString());
+
+        if (error) throw error;
+
+        res.status(200).json({ success: true, data: sessions });
+    } catch (error) {
+        console.error('❌ Get Sessions Error:', error);
+        res.status(500).json({ error: 'Failed to fetch sessions' });
+    }
+};
+
+/**
+ * Get Recent Security Alerts
+ * GET /auth/security-alerts
+ */
+export const getSecurityAlerts = async (req, res) => {
+    try {
+        const userId = req.user.id;
+
+        const { data: alerts, error } = await supabase
+            .from('security_logs')
+            .select('*')
+            .eq('user_id', userId)
+            .order('created_at', { ascending: false })
+            .limit(50);
+
+        if (error) throw error;
+
+        res.status(200).json({ success: true, data: alerts });
+    } catch (error) {
+        console.error('❌ Get Security Alerts Error:', error);
+        res.status(500).json({ error: 'Failed to fetch security alerts' });
+    }
+};
+
+/**
+ * Request Email Change (Send OTP)
+ * POST /auth/email/request
+ */
+export const requestEmailChange = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { newEmail } = req.body;
+
+        if (!isValidEmail(newEmail)) {
+            return res.status(400).json({ error: 'Invalid email address' });
+        }
+
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        otpCache.set(`${userId}_email_change`, { otp, newEmail }, 300); // 5 mins
+
+        await sendOtpEmail(newEmail, otp);
+
+        res.status(200).json({ success: true, message: 'OTP sent to new email' });
+    } catch (error) {
+        console.error('❌ Request Email Change Error:', error);
+        res.status(500).json({ error: 'Failed to send OTP' });
+    }
+};
+
+/**
+ * Verify Email Change
+ * POST /auth/email/verify
+ */
+export const verifyEmailChange = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { otp } = req.body;
+
+        const cached = otpCache.get(`${userId}_email_change`);
+        if (!cached || cached.otp !== otp) {
+            return res.status(400).json({ error: 'Invalid or expired OTP' });
+        }
+
+        const { error } = await supabase
+            .from('users')
+            .update({ email: cached.newEmail })
+            .eq('id', userId);
+
+        if (error) throw error;
+
+        otpCache.del(`${userId}_email_change`);
+        await createSecurityLog(userId, 'EMAIL_CHANGE', `Email changed to ${cached.newEmail}`, req);
+
+        res.status(200).json({ success: true, message: 'Email updated successfully' });
+    } catch (error) {
+        console.error('❌ Verify Email Change Error:', error);
+        res.status(500).json({ error: 'Failed to verify email change' });
+    }
+};
+
+/**
+ * Request Phone Change (Send OTP)
+ * POST /auth/phone/request
+ */
+export const requestPhoneChange = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { newPhone } = req.body;
+
+        if (!isValidPhone(newPhone)) {
+            return res.status(400).json({ error: 'Invalid phone number' });
+        }
+
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        otpCache.set(`${userId}_phone_change`, { otp, newPhone }, 300); // 5 mins
+
+        // Use Twilio if available
+        const twilio = getTwilioClient();
+        if (twilio && process.env.TWILIO_PHONE_NUMBER) {
+            await twilio.messages.create({
+                body: `Your EasyAuto phone verification code is: ${otp}`,
+                from: process.env.TWILIO_PHONE_NUMBER,
+                to: newPhone
+            });
+        }
+
+        console.log(`[OTP] Phone change OTP for ${newPhone}: ${otp}`);
+
+        res.status(200).json({ success: true, message: 'OTP sent to new phone number' });
+    } catch (error) {
+        console.error('❌ Request Phone Change Error:', error);
+        res.status(500).json({ error: 'Failed to send OTP' });
+    }
+};
+
+/**
+ * Verify Phone Change
+ * POST /auth/phone/verify
+ */
+export const verifyPhoneChange = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { otp } = req.body;
+
+        const cached = otpCache.get(`${userId}_phone_change`);
+        if (!cached || cached.otp !== otp) {
+            return res.status(400).json({ error: 'Invalid or expired OTP' });
+        }
+
+        const { error } = await supabase
+            .from('users')
+            .update({ phone: cached.newPhone })
+            .eq('id', userId);
+
+        if (error) throw error;
+
+        otpCache.del(`${userId}_phone_change`);
+        await createSecurityLog(userId, 'PHONE_CHANGE', `Phone changed to ${cached.newPhone}`, req);
+
+        res.status(200).json({ success: true, message: 'Phone number updated successfully' });
+    } catch (error) {
+        console.error('❌ Verify Phone Change Error:', error);
+        res.status(500).json({ error: 'Failed to verify phone change' });
+    }
+};
+
+/**
+ * Enable Two-Factor Authentication
+ * POST /auth/2fa/enable
+ */
+export const enable2FA = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { method } = req.body; // 'sms' or 'authenticator'
+
+        const { error } = await supabase
+            .from('users')
+            .update({
+                two_fa_enabled: true,
+                two_fa_method: method
+            })
+            .eq('id', userId);
+
+        if (error) throw error;
+
+        await createSecurityLog(userId, '2FA_ENABLED', `2FA enabled using ${method}`, req);
+
+        res.status(200).json({ success: true, message: `2FA enabled via ${method}` });
+    } catch (error) {
+        console.error('❌ Enable 2FA Error:', error);
+        res.status(500).json({ error: 'Failed to enable 2FA' });
+    }
+};
+
+/**
+ * Disable Two-Factor Authentication
+ * POST /auth/2fa/disable
+ */
+export const disable2FA = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { password } = req.body;
+
+        // Verify password before disabling 2FA
+        const { data: user, error: userError } = await supabase
+            .from('users')
+            .select('password')
+            .eq('id', userId)
+            .single();
+
+        if (userError || !user || !user.password) {
+            return res.status(401).json({ error: 'Unauthorized' });
+        }
+
+        const isMatch = await bcrypt.compare(password, user.password);
+        if (!isMatch) {
+            return res.status(401).json({ error: 'Incorrect password' });
+        }
+
+        const { error } = await supabase
+            .from('users')
+            .update({
+                two_fa_enabled: false,
+                two_fa_method: null,
+                two_fa_secret: null
+            })
+            .eq('id', userId);
+
+        if (error) throw error;
+
+        await createSecurityLog(userId, '2FA_DISABLED', 'User disabled 2FA', req);
+
+        res.status(200).json({ success: true, message: '2FA disabled successfully' });
+    } catch (error) {
+        console.error('❌ Disable 2FA Error:', error);
+        res.status(500).json({ error: 'Failed to disable 2FA' });
     }
 };
 

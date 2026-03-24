@@ -15,13 +15,17 @@ import { uploadFileToS3 } from '../utils/s3Service.js';
 export const updateUserDetails = async (req, res) => {
     try {
         const userId = req.params.id || req.user?.id;
-        const { name, email, phone } = req.body;
+        const {
+            name, email, phone,
+            bio, location, gender, birthday,
+            addressLine1, addressLine2, city, district, postalCode
+        } = req.body;
         const files = req.files || [];
-        
+
         console.log('Files received:', files.map(f => ({ fieldname: f.fieldname, size: f.size })));
-        
+
         const profileImageFile = files.find(f => f.fieldname === 'avatar' || f.fieldname === 'profileImage');
-        
+
         console.log('Profile image file found:', !!profileImageFile);
 
         if (!userId) {
@@ -36,6 +40,15 @@ export const updateUserDetails = async (req, res) => {
         if (name !== undefined && name !== null) updateData.name = name;
         if (email !== undefined && email !== null) updateData.email = email;
         if (phone !== undefined && phone !== null) updateData.phone = phone;
+        if (bio !== undefined && bio !== null) updateData.bio = bio;
+        if (location !== undefined && location !== null) updateData.location = location;
+        if (gender !== undefined && gender !== null) updateData.gender = gender;
+        if (birthday !== undefined && birthday !== null) updateData.birthday = birthday;
+        if (addressLine1 !== undefined && addressLine1 !== null) updateData.address_line1 = addressLine1;
+        if (addressLine2 !== undefined && addressLine2 !== null) updateData.address_line2 = addressLine2;
+        if (city !== undefined && city !== null) updateData.city = city;
+        if (district !== undefined && district !== null) updateData.district = district;
+        if (postalCode !== undefined && postalCode !== null) updateData.postal_code = postalCode;
 
         // Handle profile picture upload to S3
         if (profileImageFile) {
@@ -98,6 +111,50 @@ export const updateUserDetails = async (req, res) => {
         return res.status(500).json({
             success: false,
             message: 'Failed to update user details',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * Get user by ID
+ * Returns public user details (name, email, phone, avatar, joined_at)
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+export const getUserById = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        if (!id) {
+            return res.status(400).json({
+                success: false,
+                message: 'User ID is required'
+            });
+        }
+
+        const { data: userData, error } = await supabase
+            .from('users')
+            .select('id, name, email, phone, avatar, created_at, verification_status, address_line1, city, district')
+            .eq('id', id)
+            .single();
+
+        if (error || !userData) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            data: userData
+        });
+    } catch (error) {
+        console.error('Error fetching user:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to fetch user details',
             error: error.message
         });
     }

@@ -1,5 +1,7 @@
 import supabase from '../config/supabase.js';
 import { uploadFileToS3 } from '../utils/s3Service.js';
+import * as subscriptionService from '../services/subscriptionService.js';
+import * as emailService from '../services/emailService.js';
 
 // Create a new Car Ad
 export const createAd = async (req, res) => {
@@ -158,6 +160,44 @@ export const createAd = async (req, res) => {
             if (imgError) console.error("Image Insert Error:", imgError);
         }
 
+        // Limit Warning Logic
+        try {
+            const activeSubs = await subscriptionService.getActiveSubscriptionsForUser(seller_id);
+            // Find subscription that covers this vehicle type
+            // Note: A user might have multiple subscriptions, we need to find the one that this ad counts towards.
+            // Usually, the system should deduct from one. 
+            // Since we don't have explicit "deduct from sub X" logic visible here (it might be implicit or just based on validity),
+            // We will check all active subs that cover this vehicle type.
+
+            for (const sub of activeSubs) {
+                const limits = await subscriptionService.getPackageAdLimits(sub.package_id);
+                // Normalize IDs to string for safe comparison
+                const targetTypeId = String(safeVehicleTypeId);
+                const limitForType = limits.find(l => String(l.vehicle_types?.id) === targetTypeId);
+
+                console.log(`Debug AdLimit: Checking Sub ${sub.id}, Type ${targetTypeId}. Found Limit: ${limitForType ? 'Yes' : 'No'}`);
+
+                if (limitForType && !limitForType.is_unlimited) {
+                    const usage = await subscriptionService.getUserAdUsage(seller_id, sub.start_date, sub.end_date);
+                    const posted = usage[targetTypeId] || usage[safeVehicleTypeId] || 0;
+
+                    const allowed = limitForType.quantity;
+                    const remaining = allowed - posted;
+
+                    console.log(`Debug AdLimit: Posted ${posted}, Allowed ${allowed}, Remaining ${remaining}`);
+
+                    if (remaining <= 1) { // Covers 1, 0, and even negative (over limit)
+                        console.log(`Triggering Ad Limit Warning for User ${seller_id}`);
+                        await emailService.sendAdLimitWarningEmail(seller_id, sub.id, usage, limits);
+                    }
+                }
+            }
+
+        } catch (warningError) {
+            console.error("Ad Limit Warning Error:", warningError);
+            // Don't fail the request if warning fails
+        }
+
         res.status(201).json({
             success: true,
             message: "Car ad created successfully!",
@@ -168,6 +208,9 @@ export const createAd = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+// Moving the check inside the success flow before response for simplicity and reliability
+// Re-implementing the end of createAd to include the check.
 
 // Update Ad
 export const updateAd = async (req, res) => {
@@ -347,9 +390,144 @@ export const updateAd = async (req, res) => {
     }
 };
 
+// Get Trending Ads (Most Reviewed)
+export const getTrendingAds = async (req, res) => {
+    try {
+        // 1. Fetch all reviews to calculate popularity
+        // Note: For a larger scale app, this should be replaced with a DB View or RPC or a counter column on CarAd
+        const { data: reviews, error: reviewError } = await supabase
+            .from('reviews')
+            .select('ad_id');
+
+        if (reviewError) throw reviewError;
+
+        // 2. Count reviews per ad
+        const adCounts = {};
+        reviews.forEach(r => {
+            if (r.ad_id) {
+                adCounts[r.ad_id] = (adCounts[r.ad_id] || 0) + 1;
+            }
+        });
+
+        // 3. Sort ad IDs by count (descending)
+        const sortedAdIds = Object.keys(adCounts).sort((a, b) => adCounts[b] - adCounts[a]);
+
+        // 4. Take top 10 (or limit)
+        const topAdIds = sortedAdIds.slice(0, 10);
+
+        let orderedAds = [];
+
+        if (topAdIds.length === 0) {
+            // Fallback to latest ACTIVE ads if no reviews exist
+            const { data: fallbackAds, error: fallbackError } = await supabase
+                .from("CarAd")
+                .select(`
+                    *,
+                    CarDetails!inner(*),
+                    AdImage(*),
+                    vehicle_type:vehicle_types(type_name)
+                `)
+                .eq("status", "ACTIVE")
+                .order('created_at', { ascending: false })
+                .limit(10);
+
+            if (fallbackError) throw fallbackError;
+
+            orderedAds = fallbackAds ? fallbackAds.map(ad => ({ ...ad, review_count: 0 })) : [];
+        } else {
+            // 5. Fetch the actual ads
+            const { data: ads, error: adError } = await supabase
+                .from("CarAd")
+                .select(`
+                    *,
+                    CarDetails!inner(*),
+                    AdImage(*),
+                    vehicle_type:vehicle_types(type_name)
+                `)
+                .in('id', topAdIds)
+                .eq("status", "ACTIVE");
+
+            if (adError) throw adError;
+
+            // 6. Preserve order (since .in() doesn't guarantee order)
+            // and attach review count
+            orderedAds = topAdIds
+                .map(id => ads.find(ad => ad.id === id))
+                .filter(Boolean)
+                .map(ad => ({
+                    ...ad,
+                    review_count: adCounts[ad.id]
+                }));
+        }
+
+        res.json({ success: true, data: orderedAds });
+
+    } catch (error) {
+        console.error("Error fetching trending ads:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// Get Recommended Ads (Mixed Vehicle Types)
+export const getRecommendedAds = async (req, res) => {
+    try {
+        // 1. Fetch active ads (limit 50 recent to mix from)
+        const { data: ads, error } = await supabase
+            .from("CarAd")
+            .select(`
+                *,
+                CarDetails!inner(*),
+                AdImage(*),
+                vehicle_type:vehicle_types(type_name)
+            `)
+            .eq("status", "ACTIVE")
+            .order('created_at', { ascending: false })
+            .limit(50);
+
+        if (error) throw error;
+
+        if (!ads || ads.length === 0) {
+            return res.json({ success: true, data: [] });
+        }
+
+        // 2. Group by vehicle_type_id
+        const grouped = {};
+        ads.forEach(ad => {
+            const typeId = ad.vehicle_type_id || 'unknown';
+            if (!grouped[typeId]) grouped[typeId] = [];
+            grouped[typeId].push(ad);
+        });
+
+        // 3. Round-robin interleaving
+        const mixedAds = [];
+        const typeKeys = Object.keys(grouped);
+        let maxLen = 0;
+        typeKeys.forEach(key => {
+            if (grouped[key].length > maxLen) maxLen = grouped[key].length;
+        });
+
+        for (let i = 0; i < maxLen; i++) {
+            for (const key of typeKeys) {
+                if (grouped[key][i]) {
+                    mixedAds.push(grouped[key][i]);
+                }
+            }
+        }
+
+        // 4. Limit result (e.g. top 10 or 20 mixed)
+        const finalAds = mixedAds.slice(0, 20);
+
+        res.json({ success: true, data: finalAds });
+
+    } catch (error) {
+        console.error("Error fetching recommended ads:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 // Get all ads (Public)
 export const getAds = async (req, res) => {
-    const { page, limit, brand, model, minPrice, maxPrice, vehicleTypeId, location, search, isHomepageBanner, isPopupPromotion } = req.query;
+    const { page, limit, brand, model, minPrice, maxPrice, vehicleTypeId, location, search, isHomepageBanner, isPopupPromotion, sellerId } = req.query;
     const pageInt = parseInt(page) || 1;
     const limitInt = parseInt(limit) || 10;
     const start = (pageInt - 1) * limitInt;
@@ -363,13 +541,15 @@ export const getAds = async (req, res) => {
                 CarDetails!inner(*),
                 AdImage(*)
             `, { count: 'exact' })
-            .eq("status", "ACTIVE");
+            .eq("status", "ACTIVE")
+            .or('is_banned.is.null,is_banned.eq.false');
 
         if (minPrice) queryBuilder = queryBuilder.gte("price", minPrice);
         if (maxPrice) queryBuilder = queryBuilder.lte("price", maxPrice);
         if (vehicleTypeId) queryBuilder = queryBuilder.eq('vehicle_type_id', vehicleTypeId);
         if (brand) queryBuilder = queryBuilder.eq('CarDetails.brand', brand);
         if (model) queryBuilder = queryBuilder.eq('CarDetails.model', model);
+        if (sellerId) queryBuilder = queryBuilder.eq('seller_id', sellerId);
 
         if (location) {
             queryBuilder = queryBuilder.ilike('location', `%${location}%`);
@@ -388,11 +568,24 @@ export const getAds = async (req, res) => {
             queryBuilder = queryBuilder.eq('is_popup_promotion', true);
         }
 
+        const { sort, order } = req.query;
+        if (req.query.ids) {
+            const idsList = req.query.ids.split(',').map(id => id.trim()).filter(id => id);
+            if (idsList.length > 0) {
+                queryBuilder = queryBuilder.in('id', idsList);
+            }
+        }
+
         // Apply pagination and boost sorting
-        queryBuilder = queryBuilder
-            .range(start, end)
-            .order('is_featured', { ascending: false })
-            .order('created_at', { ascending: false });
+        queryBuilder = queryBuilder.range(start, end);
+
+        if (sort) {
+            queryBuilder = queryBuilder.order(sort, { ascending: order === 'asc' });
+        } else {
+            queryBuilder = queryBuilder
+                .order('is_featured', { ascending: false })
+                .order('created_at', { ascending: false });
+        }
 
         const { data, count, error } = await queryBuilder;
 
@@ -544,7 +737,7 @@ export const getAdById = async (req, res) => {
         if (adData.seller_id) {
             const { data: userData, error: userError } = await supabase
                 .from("users")
-                .select("name, email, phone")
+                .select("id, name, email, phone")
                 .eq("id", adData.seller_id)
                 .single();
 
@@ -553,8 +746,8 @@ export const getAdById = async (req, res) => {
             }
         }
 
-        // Increment view count
-        const newCount = (adData.views_count || 0) + 1;
+        // Increment view count (1 view counts as 2 as per user request)
+        const newCount = (adData.views_count || 0) + 2;
         await supabase.from("CarAd").update({ views_count: newCount }).eq('id', id);
 
         const responseData = {
@@ -686,7 +879,19 @@ export const adminGetAds = async (req, res) => {
         }
 
         if (search) {
-            query = query.ilike('title', `%${search}%`);
+            // Check if search term is a UUID
+            const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(search.trim());
+
+            if (isUuid) {
+                query = query.eq('id', search.trim());
+            } else {
+                // Search in title
+                query = query.ilike('title', `%${search}%`);
+
+                // Note: Searching across seller (users) requires a different approach if using Supabase client directly
+                // because you can't easily do a cross-table search on non-joined fields without an RPC or complex or filter.
+                // For now, we'll keep it to title, but we could fetch relevant seller IDs first if needed.
+            }
         }
 
         const { data, count, error } = await query;
@@ -801,6 +1006,121 @@ export const adminUpdateAdStatus = async (req, res) => {
 
         res.json({ success: true, data });
     } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// Admin: Ban Ad
+export const adminBanAd = async (req, res) => {
+    const { id } = req.params;
+    const { durationHours, reason } = req.body;
+
+    try {
+        const ban_expires_at = durationHours
+            ? new Date(Date.now() + parseInt(durationHours) * 60 * 60 * 1000).toISOString()
+            : null;
+
+        const { data, error } = await supabase
+            .from("CarAd")
+            .update({
+                is_banned: true,
+                ban_expires_at,
+                ban_reason: reason || 'Violation of terms',
+                status: 'BANNED' // Keeping status for easier UI filtering even if we have boolean
+            })
+            .eq("id", id)
+            .select()
+            .single();
+
+        if (error) throw error;
+        res.json({ success: true, message: 'Ad banned successfully', data });
+    } catch (error) {
+        console.error("Error in adminBanAd:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// Admin: Unban Ad
+export const adminUnbanAd = async (req, res) => {
+    const { id } = req.params;
+
+    try {
+        const { data, error } = await supabase
+            .from("CarAd")
+            .update({
+                is_banned: false,
+                ban_expires_at: null,
+                ban_reason: null,
+                status: 'ACTIVE' // Restore to active
+            })
+            .eq("id", id)
+            .select()
+            .single();
+
+        if (error) throw error;
+        res.json({ success: true, message: 'Ad unbanned successfully', data });
+    } catch (error) {
+        console.error("Error in adminUnbanAd:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// Delete Ad
+export const deleteAd = async (req, res) => {
+    const { id: adId } = req.params;
+    const userId = req.user.id; // From protect middleware
+
+    try {
+        // 1. Check if ad exists and belongs to the user
+        const { data: ad, error: fetchError } = await supabase
+            .from("CarAd")
+            .select("id, seller_id")
+            .eq("id", adId)
+            .single();
+
+        if (fetchError || !ad) {
+            return res.status(404).json({ success: false, message: "Ad not found" });
+        }
+
+        if (ad.seller_id !== userId) {
+            return res.status(403).json({ success: false, message: "You are not authorized to delete this ad" });
+        }
+
+        // 2. Delete related data (Cascade delete should ideally handle this in DB, but manual cleanup ensures it)
+        // AdImage, CarDetails, car_details_attribute_values, ad_boosts, etc.
+
+        // Delete Attributes
+        await supabase.from("car_details_attribute_values").delete().eq("ad_id", adId);
+
+        // Delete Details
+        await supabase.from("CarDetails").delete().eq("ad_id", adId);
+
+        // Delete Images
+        await supabase.from("AdImage").delete().eq("ad_id", adId);
+
+        // Delete Boosts (if any)
+        await supabase.from("ad_boosts").delete().eq("ad_id", adId);
+
+        // Nullify ad_id in payments (Preserves history while allowing ad deletion)
+        await supabase.from("payments").update({ ad_id: null }).eq("ad_id", adId);
+
+        // Delete from Wishlist
+        await supabase.from("wishlist").delete().eq("ad_id", adId);
+
+        // Delete from Reviews
+        await supabase.from("reviews").delete().eq("ad_id", adId);
+
+        // 3. Finally delete the CarAd record
+        const { error: deleteError } = await supabase
+            .from("CarAd")
+            .delete()
+            .eq("id", adId);
+
+        if (deleteError) throw deleteError;
+
+        res.json({ success: true, message: "Ad deleted successfully" });
+    } catch (error) {
+        console.error("Error deleting ad:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

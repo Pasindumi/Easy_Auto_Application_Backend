@@ -1,36 +1,5 @@
 import supabase from '../config/supabase.js';
 
-/**
- * Get active announcements
- * Returns a list of current news and updates
- */
-export const getActiveAnnouncements = async (req, res) => {
-    try {
-        const { data, error } = await supabase
-            .from('announcements')
-            .select('*')
-            .eq('status', 'ACTIVE')
-            .order('created_at', { ascending: false });
-
-        if (error) {
-            // Handle table not existing gracefully
-            if (error.code === '42P01') {
-                console.warn('Announcements table does not exist yet.');
-                return res.json({ success: true, data: [] });
-            }
-            throw error;
-        }
-
-        res.json({ success: true, data: data || [] });
-    } catch (error) {
-        console.error('Fetch active announcements error:', error);
-        res.status(500).json({ success: false, message: error.message });
-    }
-};
-
-/**
- * Get all announcements (Admin)
- */
 export const getAnnouncements = async (req, res) => {
     try {
         const { data, error } = await supabase
@@ -39,70 +8,135 @@ export const getAnnouncements = async (req, res) => {
             .order('created_at', { ascending: false });
 
         if (error) throw error;
-        res.json({ success: true, data: data || [] });
+        res.json({ success: true, data });
     } catch (error) {
-        console.error('Fetch announcements error:', error);
-        res.status(500).json({ success: false, message: error.message });
+        res.status(500).json({ error: error.message });
     }
 };
 
-/**
- * Create an announcement
- */
-export const createAnnouncement = async (req, res) => {
-    const { title, content, image_url, link, status } = req.body;
+export const getAnnouncement = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { data, error } = await supabase
+            .from('announcements')
+            .select('*')
+            .eq('id', id)
+            .single();
+
+        if (error) throw error;
+        if (!data) return res.status(404).json({ success: false, error: 'Announcement not found' });
+
+        res.json({ success: true, data });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+};
+
+export const getActiveAnnouncements = async (req, res) => {
     try {
         const { data, error } = await supabase
             .from('announcements')
-            .insert([{ title, content, image_url, link, status: status ?? 'ACTIVE' }])
+            .select('*')
+            .eq('status', 'ACTIVE')
+            .order('created_at', { ascending: false });
+
+        if (error) throw error;
+        res.json({ success: true, data });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+};
+
+export const createAnnouncement = async (req, res) => {
+    try {
+        let { title, content, link, status } = req.body;
+        const file = req.file;
+
+        if (!title) {
+            return res.status(400).json({ error: 'Title is required' });
+        }
+
+        let imageUrl = null;
+        if (file) {
+            try {
+                const { uploadFileToS3 } = await import('../utils/s3Service.js');
+                imageUrl = await uploadFileToS3(file.buffer, file.originalname, file.mimetype, 'announcements');
+            } catch (err) {
+                console.error("S3 Upload Error for Announcement:", err);
+            }
+        }
+
+        const { data, error } = await supabase
+            .from('announcements')
+            .insert([{
+                title,
+                content,
+                link,
+                status: status || 'ACTIVE',
+                image_url: imageUrl
+            }])
             .select()
             .single();
 
         if (error) throw error;
+
         res.status(201).json({ success: true, data });
     } catch (error) {
-        console.error('Create announcement error:', error);
-        res.status(500).json({ success: false, message: error.message });
+        console.error('Create Announcement Exception:', error);
+        res.status(500).json({ error: error.message });
     }
 };
 
-/**
- * Update an announcement
- */
 export const updateAnnouncement = async (req, res) => {
-    const { id } = req.params;
-    const updates = req.body;
     try {
+        const { id } = req.params;
+        let { title, content, link, status } = req.body;
+        const file = req.file;
+
+        const updateData = {
+            title,
+            content,
+            link,
+            status
+        };
+
+        if (file) {
+            try {
+                const { uploadFileToS3 } = await import('../utils/s3Service.js');
+                const imageUrl = await uploadFileToS3(file.buffer, file.originalname, file.mimetype, 'announcements');
+                updateData.image_url = imageUrl;
+            } catch (err) {
+                console.error("S3 Upload Error for Announcement Update:", err);
+            }
+        }
+
         const { data, error } = await supabase
             .from('announcements')
-            .update(updates)
+            .update(updateData)
             .eq('id', id)
             .select()
             .single();
 
         if (error) throw error;
-        res.json({ success: true, data });
+
+        res.json({ message: 'Announcement updated successfully', data });
     } catch (error) {
-        console.error('Update announcement error:', error);
-        res.status(500).json({ success: false, message: error.message });
+        console.error('Update Announcement Exception:', error);
+        res.status(500).json({ error: error.message });
     }
 };
 
-/**
- * Delete an announcement
- */
 export const deleteAnnouncement = async (req, res) => {
-    const { id } = req.params;
     try {
+        const { id } = req.params;
         const { error } = await supabase
             .from('announcements')
             .delete()
             .eq('id', id);
 
         if (error) throw error;
-        res.json({ success: true, message: 'Announcement deleted successfully' });
+        res.json({ message: 'Announcement deleted successfully' });
     } catch (error) {
-        console.error('Delete announcement error:', error);
-        res.status(500).json({ success: false, message: error.message });
+        res.status(500).json({ error: error.message });
     }
 };

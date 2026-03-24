@@ -12,7 +12,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'your_super_secret_key_change_this'
 const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'your_refresh_secret_key_change_this';
 
 // Token expiry times
-const ACCESS_TOKEN_EXPIRY = '15m'; // 15 minutes
+const ACCESS_TOKEN_EXPIRY = '7d'; // 
 const REFRESH_TOKEN_EXPIRY = '7d'; // 7 days
 const REFRESH_TOKEN_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000; // 7 days in milliseconds
 
@@ -54,8 +54,10 @@ export const generateTokenPair = async (user) => {
   const accessToken = generateAccessToken(payload);
   const refreshToken = generateRefreshToken(payload);
 
-  // Store refresh token in database
-  await storeRefreshToken(user.id, refreshToken);
+  // Store refresh token in database with device info
+  const deviceInfo = user.deviceInfo || 'Unknown Device';
+  const ipAddress = user.ipAddress || 'Unknown IP';
+  await storeRefreshToken(user.id, refreshToken, deviceInfo, ipAddress);
 
   return {
     accessToken,
@@ -109,8 +111,10 @@ const hashToken = async (token) => {
  * Store refresh token in database
  * @param {string} userId - User ID
  * @param {string} token - Refresh token
+ * @param {string} deviceInfo - Device name/type
+ * @param {string} ipAddress - IP address
  */
-export const storeRefreshToken = async (userId, token) => {
+export const storeRefreshToken = async (userId, token, deviceInfo, ipAddress) => {
   const tokenHash = await hashToken(token);
   const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_MS);
 
@@ -119,7 +123,10 @@ export const storeRefreshToken = async (userId, token) => {
     .insert([{
       user_id: userId,
       token_hash: tokenHash,
-      expires_at: expiresAt.toISOString()
+      expires_at: expiresAt.toISOString(),
+      device_name: deviceInfo,
+      ip_address: ipAddress,
+      last_active_at: new Date().toISOString()
     }]);
 
   if (error) {
@@ -221,7 +228,7 @@ export const refreshAccessToken = async (refreshToken) => {
 
   // Verify token exists in database and is valid
   const isValid = await verifyRefreshTokenInDB(decoded.id, refreshToken);
-  
+
   if (!isValid) {
     throw new Error('Invalid or expired refresh token');
   }

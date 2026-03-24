@@ -1,6 +1,6 @@
 import express from 'express';
 import multer from 'multer';
-import { createAd, getAds, getAdById, updateAd, adminGetAds, adminUpdateAdStatus, getMyAds } from '../controllers/carController.js';
+import { createAd, getAds, getAdById, updateAd, adminGetAds, adminUpdateAdStatus, adminBanAd, adminUnbanAd, getMyAds, deleteAd, getTrendingAds, getRecommendedAds } from '../controllers/carController.js';
 import { protectAdmin } from '../middlewares/adminAuthMiddleware.js';
 import { protect } from '../middlewares/authMiddleware.js';
 
@@ -21,6 +21,8 @@ const upload = multer({
 router.get("/my-ads", protect, getMyAds); // GET /api/cars/my-ads
 
 // 2. Collection Routes
+router.get("/trending", getTrendingAds); // GET /api/cars/trending - Get trending ads
+router.get("/recommended", getRecommendedAds); // GET /api/cars/recommended - Get mixed recommended ads
 router.get("/", getAds); // GET /api/cars - List all ads
 router.get("/trending", getAds); // Fallback to getAds for now, or specific controller
 router.get("/recommended", getAds); // Fallback to getAds for now
@@ -29,11 +31,14 @@ router.post("/", protect, upload.array('images', 10), createAd); // POST /api/ca
 // 3. Generic ID Routes
 router.get("/:id", getAdById); // GET /api/cars/:id - Get single ad
 router.put("/:id", protect, upload.array('images', 10), updateAd); // PUT /api/cars/:id - Update ad
+router.delete("/:id", protect, deleteAd); // DELETE /api/cars/:id - Delete ad
 
 // ============================================
 // ADMIN ROUTES (Admin authentication required)
 // ============================================
 router.get("/admin/all", protectAdmin, adminGetAds); // GET /api/cars/admin/all
 router.put("/admin/:id/status", protectAdmin, adminUpdateAdStatus); // PUT /api/cars/admin/:id/status
+router.put("/admin/:id/ban", protectAdmin, adminBanAd); // PUT /api/cars/admin/:id/ban
+router.put("/admin/:id/unban", protectAdmin, adminUnbanAd); // PUT /api/cars/admin/:id/unban
 
 export default router;
