@@ -538,15 +538,23 @@ export const getAds = async (req, res) => {
             .from("CarAd")
             .select(`
                 *,
-                CarDetails!inner(*),
-                AdImage(*)
+                CarDetails(*),
+                AdImage(*),
+                attributes:car_details_attribute_values(
+                    attribute_id,
+                    value,
+                    attribute:vehicle_attributes(attribute_name, unit, data_type)
+                )
             `, { count: 'exact' })
             .eq("status", "ACTIVE")
             .or('is_banned.is.null,is_banned.eq.false');
 
+        // ... (filters)
         if (minPrice) queryBuilder = queryBuilder.gte("price", minPrice);
         if (maxPrice) queryBuilder = queryBuilder.lte("price", maxPrice);
         if (vehicleTypeId) queryBuilder = queryBuilder.eq('vehicle_type_id', vehicleTypeId);
+
+        // Brand/Model filtering needs joining CarDetails
         if (brand) queryBuilder = queryBuilder.eq('CarDetails.brand', brand);
         if (model) queryBuilder = queryBuilder.eq('CarDetails.model', model);
         if (sellerId) queryBuilder = queryBuilder.eq('seller_id', sellerId);
@@ -556,7 +564,6 @@ export const getAds = async (req, res) => {
         }
 
         if (search) {
-            // Complex search: title OR brand OR model
             queryBuilder = queryBuilder.ilike('title', `%${search}%`);
         }
 
@@ -576,7 +583,6 @@ export const getAds = async (req, res) => {
             }
         }
 
-        // Apply pagination and boost sorting
         queryBuilder = queryBuilder.range(start, end);
 
         if (sort) {
@@ -590,7 +596,6 @@ export const getAds = async (req, res) => {
         const { data, count, error } = await queryBuilder;
 
         if (error) {
-            // Definitive check for range/bounds issues
             const isRangeError = error.code === 'PGRST103' ||
                 (error.message && typeof error.message === 'string' && error.message.includes('out of bounds'));
 
@@ -608,6 +613,26 @@ export const getAds = async (req, res) => {
             }
 
             throw error;
+        }
+
+        // Fetch seller details separately to avoid join issues
+        const sellerIds = [...new Set(data.map(ad => ad.seller_id).filter(Boolean))];
+        if (sellerIds.length > 0) {
+            const { data: usersData, error: usersError } = await supabase
+                .from('users')
+                .select('id, name, avatar')
+                .in('id', sellerIds);
+
+            if (!usersError && usersData) {
+                const userMap = usersData.reduce((acc, user) => {
+                    acc[user.id] = user;
+                    return acc;
+                }, {});
+
+                data.forEach(ad => {
+                    ad.users = userMap[ad.seller_id] || null;
+                });
+            }
         }
 
         res.json({

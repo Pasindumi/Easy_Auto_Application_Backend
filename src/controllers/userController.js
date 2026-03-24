@@ -135,7 +135,7 @@ export const getUserById = async (req, res) => {
 
         const { data: userData, error } = await supabase
             .from('users')
-            .select('id, name, email, phone, avatar, created_at, verification_status, address_line1, city, district')
+            .select('id, name, email, phone, avatar, created_at, address_line1, city, district')
             .eq('id', id)
             .single();
 
@@ -155,6 +155,69 @@ export const getUserById = async (req, res) => {
         return res.status(500).json({
             success: false,
             message: 'Failed to fetch user details',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * Get all sellers (users with ads)
+ */
+export const getSellers = async (req, res) => {
+    try {
+        console.log('--- FETCHING SELLERS ---');
+        // 1. Get unique seller IDs who have published ANY ad (Active or Expired)
+        const { data: sellerIdsData, error: idError } = await supabase
+            .from('CarAd')
+            .select('seller_id, status')
+            .in('status', ['ACTIVE', 'EXPIRED', 'PENDING']);
+
+        if (idError) throw idError;
+
+        console.log(`Found ${sellerIdsData?.length || 0} ads in eligible statuses`);
+
+        const sellerIds = [...new Set(sellerIdsData.map(ad => ad.seller_id).filter(Boolean))];
+
+        console.log(`Unique seller IDs: ${sellerIds.length}`);
+
+        if (sellerIds.length === 0) {
+            return res.json({ success: true, data: [] });
+        }
+
+        // 2. Fetch user details for these IDs
+        const { data: users, error: userError } = await supabase
+            .from('users')
+            .select(`
+                id, 
+                name, 
+                avatar, 
+                location, 
+                bio
+            `)
+            .in('id', sellerIds);
+
+        if (userError) throw userError;
+
+        // 3. Map listing counts from sellerIdsData (already contains active ads)
+        const countMap = sellerIdsData.reduce((acc, ad) => {
+            if (ad.seller_id) {
+                acc[ad.seller_id] = (acc[ad.seller_id] || 0) + 1;
+            }
+            return acc;
+        }, {});
+
+        // Post-process to include listing counts
+        const sellers = users.map(user => ({
+            ...user,
+            listingsCount: countMap[user.id] || 0
+        }));
+
+        res.json({ success: true, data: sellers });
+    } catch (error) {
+        console.error('Error fetching sellers:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch sellers',
             error: error.message
         });
     }
