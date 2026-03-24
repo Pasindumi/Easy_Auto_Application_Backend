@@ -36,6 +36,11 @@ router.get('/conversations/:id/messages', getMessages);
 router.post('/conversations', startConversation);
 
 /**
+ * @route POST /api/chat/conversations/:id/messages
+ */
+router.post('/conversations/:id/messages', sendMessage);
+
+/**
  * @route DELETE /api/chat/messages/:id
  */
 router.delete('/messages/:id', deleteMessage);
