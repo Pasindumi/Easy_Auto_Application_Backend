@@ -167,13 +167,13 @@ export const initiatePayment = async (req, res) => {
 
 /**
  * Mock Payment Success (Bypass PayHere)
- * Creates payment and subscription records directly.
+ * Creates payment records and directly activates ads or assigns subscriptions.
  */
 export const mockPaymentSuccess = async (req, res) => {
     try {
-        const { userId, packageId, amount, orderId, planName, adId } = req.body;
+        const { userId, packageId, amount, orderId, planName, adId, rentalAdId } = req.body;
 
-        if (!userId || !packageId || !amount) {
+        if (!userId || amount === undefined) {
             return res.status(400).json({ success: false, message: "Missing required parameters." });
         }
 
@@ -184,8 +184,9 @@ export const mockPaymentSuccess = async (req, res) => {
             .from('payments')
             .insert({
                 user_id: userId,
-                package_id: packageId,
+                package_id: packageId || null,
                 ad_id: adId || null,
+                rental_ad_id: rentalAdId || null,
                 order_id: generatedOrderId,
                 amount: amount,
                 currency: 'LKR',
@@ -201,59 +202,93 @@ export const mockPaymentSuccess = async (req, res) => {
             return res.status(500).json({ success: false, message: "Failed to create payment." });
         }
 
-        // 2. Fetch Package Duration from Features
-        const { data: featData } = await supabase
-            .from('package_features')
-            .select('feature_value')
-            .eq('price_item_id', packageId)
-            .eq('feature_key', 'DURATION_DAYS')
-            .single();
+        if (packageId) {
+            // It's a Package or Boost
+            // Fetch Package Duration from Features
+            const { data: featData } = await supabase
+                .from('package_features')
+                .select('feature_value')
+                .eq('price_item_id', packageId)
+                .eq('feature_key', 'DURATION_DAYS')
+                .single();
 
-        const durationDays = featData ? parseInt(featData.feature_value) : 30;
+            const durationDays = featData ? parseInt(featData.feature_value) : 30;
 
-        // 3. Handle Boost vs Subscription
-        // Fetch price item to check type
-        const { data: pkgData } = await supabase.from('price_items').select('item_type').eq('id', packageId).single();
+            // Handle Boost vs Subscription
+            const { data: pkgData } = await supabase.from('price_items').select('item_type').eq('id', packageId).single();
 
-        if (pkgData?.item_type === 'BOOST_PACKAGE' && adId) {
-            // It's a boost!
-            const { applyBoostToAd } = await import('./boostController.js');
-            await applyBoostToAd({
-                adId: adId,
-                packageId: packageId,
-                paymentId: payData.id,
-                durationDays
-            });
-            console.log(`Boost Package ${packageId} mock-applied to Ad ${adId}`);
-        } else {
-            // Regular Subscription
-            const startDate = new Date();
-            const endDate = new Date();
-            endDate.setDate(startDate.getDate() + (isNaN(durationDays) ? 30 : durationDays));
-
-            const { error: subError } = await supabase
-                .from('user_subscriptions')
-                .insert({
-                    user_id: userId,
-                    package_id: packageId,
-                    payment_id: payData.id,
-                    start_date: startDate.toISOString(),
-                    end_date: endDate.toISOString(),
-                    status: 'ACTIVE'
+            if (pkgData?.item_type === 'BOOST_PACKAGE' && adId) {
+                // It's a boost!
+                const { applyBoostToAd } = await import('./boostController.js');
+                await applyBoostToAd({
+                    adId: adId,
+                    packageId: packageId,
+                    paymentId: payData.id,
+                    durationDays
                 });
+                console.log(`Boost Package ${packageId} mock-applied to Ad ${adId}`);
+            } else {
+                // Regular Subscription
+                const startDate = new Date();
+                const endDate = new Date();
+                endDate.setDate(startDate.getDate() + (isNaN(durationDays) ? 30 : durationDays));
 
-            if (subError) {
-                console.error("Mock Subscription Insert Error:", subError);
-                return res.status(500).json({ success: false, message: "Failed to create subscription." });
+                const { error: subError } = await supabase
+                    .from('user_subscriptions')
+                    .insert({
+                        user_id: userId,
+                        package_id: packageId,
+                        payment_id: payData.id,
+                        start_date: startDate.toISOString(),
+                        end_date: endDate.toISOString(),
+                        status: 'ACTIVE'
+                    });
+
+                if (subError) {
+                    console.error("Mock Subscription Insert Error:", subError);
+                    return res.status(500).json({ success: false, message: "Failed to create subscription." });
+                }
+            }
+
+            // Send Email Notification
+            sendPackagePurchaseEmail(userId, packageId, payData.id).catch(err => console.error("Email trigger error:", err));
+
+        }
+
+        // Handle Standalone Ad Activation (Even if it used a package, it still needs activation if it's a new ad)
+        if (adId || rentalAdId) {
+            const targetId = adId || rentalAdId;
+            const tableName = rentalAdId ? 'rental_ads' : 'CarAd';
+
+            // Only fetch expiry_days for standard activation 
+            // Skip activation if it was just a BOOST package (since it's already active)
+            const pkgData = packageId ? await supabase.from('price_items').select('item_type').eq('id', packageId).single() : { data: null };
+
+            if (pkgData?.data?.item_type !== 'BOOST_PACKAGE') {
+                const { data: ad } = await supabase
+                    .from(tableName)
+                    .select('vehicle_types(expiry_days)')
+                    .eq('id', targetId)
+                    .single();
+
+                const expiryDays = ad?.vehicle_types?.expiry_days || 30;
+                const expiryDate = new Date();
+                expiryDate.setDate(expiryDate.getDate() + expiryDays);
+
+                const { error: updateError } = await supabase
+                    .from(tableName)
+                    .update({ status: 'ACTIVE', expiry_date: expiryDate.toISOString() })
+                    .eq('id', targetId);
+
+                if (updateError) {
+                    console.error("Ad Activation Error:", updateError);
+                    return res.status(500).json({ success: false, message: "Failed to activate ad." });
+                }
+                console.log(`Ad ${targetId} mock-activated in ${tableName}`);
             }
         }
 
-        // 4. Send Email Notification
-        // We don't await this to keep response fast, or we can await if critical.
-        // Better to fire and forget or wrap in try-catch to not block response.
-        sendPackagePurchaseEmail(userId, packageId, payData.id).catch(err => console.error("Email trigger error:", err));
-
-        return res.json({ success: true, message: "Payment successful and package assigned." });
+        return res.json({ success: true, message: "Payment successful and request processed." });
 
     } catch (error) {
         console.error("Error in mock payment:", error);
