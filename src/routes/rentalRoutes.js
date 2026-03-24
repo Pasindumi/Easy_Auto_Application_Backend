@@ -24,7 +24,9 @@ const upload = multer({
 
 const uploadFields = upload.fields([
     { name: 'images', maxCount: 10 },
-    { name: 'documents', maxCount: 5 }
+    { name: 'doc_id_front', maxCount: 1 },
+    { name: 'doc_id_back', maxCount: 1 },
+    { name: 'doc_ownership', maxCount: 1 }
 ]);
 
 // ============================================

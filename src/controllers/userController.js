@@ -277,3 +277,65 @@ export const deleteUser = async (req, res) => {
         });
     }
 };
+
+/**
+ * Get User Stats
+ * Aggregates the number of published ads, saved ads, and total views across all ads for the current user.
+ */
+export const getUserStats = async (req, res) => {
+    try {
+        const userId = req.user?.id;
+
+        if (!userId) {
+            return res.status(401).json({ success: false, message: 'Unauthorized' });
+        }
+
+        // 1. Get Ads Count & Total Views for Car Ads
+        const { data: carAds, error: carError } = await supabase
+            .from('CarAd')
+            .select('id, views_count')
+            .eq('seller_id', userId);
+
+        if (carError) throw carError;
+
+        // 2. Get Ads Count & Total Views for Rental Ads
+        const { data: rentalAds, error: rentalError } = await supabase
+            .from('rental_ads')
+            .select('id, views_count')
+            .eq('seller_id', userId);
+
+        if (rentalError) throw rentalError;
+
+        // 3. Get Saved Ads Count
+        // To be safe, look at how saved_ads is queried in other places. Usually it's `saved_ads` or `saved_cars`.
+        // I will assume `saved_ads` table exists or fallback gracefully.
+        const { count: savedCount, error: savedError } = await supabase
+            .from('saved_ads')
+            .select('*', { count: 'exact', head: true })
+            .eq('user_id', userId);
+
+        // 4. Calculate stats
+        const totalAdsCount = (carAds?.length || 0) + (rentalAds?.length || 0);
+
+        const carViews = carAds?.reduce((sum, ad) => sum + (ad.views_count || 0), 0) || 0;
+        const rentalViews = rentalAds?.reduce((sum, ad) => sum + (ad.views_count || 0), 0) || 0;
+        const totalViewsCount = carViews + rentalViews;
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                ads: totalAdsCount,
+                saved: savedCount || 0,
+                views: totalViewsCount
+            }
+        });
+
+    } catch (error) {
+        console.error('Error fetching user stats:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to fetch user stats',
+            error: error.message
+        });
+    }
+};

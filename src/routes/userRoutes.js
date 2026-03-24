@@ -4,7 +4,8 @@ import {
     updateUserDetails,
     getUserById,
     getSellers,
-    deleteUser
+    deleteUser,
+    getUserStats
 } from '../controllers/userController.js';
 import { protect } from '../middlewares/authMiddleware.js';
 
@@ -23,6 +24,7 @@ const upload = multer({ storage: multer.memoryStorage() });
  * @returns {Object} Updated user details with avatar URL
  */
 router.get('/sellers', getSellers);
+router.get('/stats', protect, getUserStats);
 router.get('/:id', getUserById);
 router.put('/:id', protect, upload.any(), updateUserDetails);
 
