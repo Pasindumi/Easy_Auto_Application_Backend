@@ -463,6 +463,38 @@ export const deleteModel = async (req, res) => {
 
 // --- Vehicle Conditions ---
 
+// Get All Conditions (Read-only for App/Search)
+export const getAllConditions = async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('vehicle_conditions')
+            .select('*')
+            .eq('status', 'ACTIVE'); // Users see active only
+
+        if (error) throw error;
+
+        let result = data || [];
+
+        // Remove duplicates by condition_name to provide a clean list for general search
+        const uniqueConditions = [];
+        const seenNames = new Set();
+        result.forEach(item => {
+            if (!seenNames.has(item.condition_name)) {
+                uniqueConditions.push(item);
+                seenNames.add(item.condition_name);
+            }
+        });
+
+        // Sort A-Z
+        uniqueConditions.sort((a, b) => a.condition_name.localeCompare(b.condition_name));
+
+        res.json(uniqueConditions);
+    } catch (error) {
+        console.error('Vehicle Config Error:', error);
+        res.status(500).json({ message: error.message });
+    }
+};
+
 export const getConditionsByType = async (req, res) => {
     const { typeId } = req.params;
     try {
