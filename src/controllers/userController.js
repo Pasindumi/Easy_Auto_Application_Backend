@@ -117,6 +117,50 @@ export const updateUserDetails = async (req, res) => {
 };
 
 /**
+ * Get user by ID
+ * Returns public user details (name, email, phone, avatar, joined_at)
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+export const getUserById = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        if (!id) {
+            return res.status(400).json({
+                success: false,
+                message: 'User ID is required'
+            });
+        }
+
+        const { data: userData, error } = await supabase
+            .from('users')
+            .select('id, name, email, phone, avatar, created_at, verification_status, address_line1, city, district')
+            .eq('id', id)
+            .single();
+
+        if (error || !userData) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            data: userData
+        });
+    } catch (error) {
+        console.error('Error fetching user:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to fetch user details',
+            error: error.message
+        });
+    }
+};
+
+/**
  * Delete user
  * Permanently deletes a user account and associated data
  * @param {Object} req - Express request object

@@ -2,6 +2,7 @@ import express from 'express';
 import multer from 'multer';
 import {
     updateUserDetails,
+    getUserById,
     deleteUser
 } from '../controllers/userController.js';
 import { protect } from '../middlewares/authMiddleware.js';
@@ -20,6 +21,7 @@ const upload = multer({ storage: multer.memoryStorage() });
  * @body {Object} Updated user data (name, email, phone) and optional image file
  * @returns {Object} Updated user details with avatar URL
  */
+router.get('/:id', getUserById);
 router.put('/:id', protect, upload.any(), updateUserDetails);
 
 /**

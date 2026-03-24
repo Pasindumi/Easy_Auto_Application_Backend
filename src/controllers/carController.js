@@ -527,7 +527,7 @@ export const getRecommendedAds = async (req, res) => {
 
 // Get all ads (Public)
 export const getAds = async (req, res) => {
-    const { page, limit, brand, model, minPrice, maxPrice, vehicleTypeId, location, search, isHomepageBanner, isPopupPromotion } = req.query;
+    const { page, limit, brand, model, minPrice, maxPrice, vehicleTypeId, location, search, isHomepageBanner, isPopupPromotion, sellerId } = req.query;
     const pageInt = parseInt(page) || 1;
     const limitInt = parseInt(limit) || 10;
     const start = (pageInt - 1) * limitInt;
@@ -549,6 +549,7 @@ export const getAds = async (req, res) => {
         if (vehicleTypeId) queryBuilder = queryBuilder.eq('vehicle_type_id', vehicleTypeId);
         if (brand) queryBuilder = queryBuilder.eq('CarDetails.brand', brand);
         if (model) queryBuilder = queryBuilder.eq('CarDetails.model', model);
+        if (sellerId) queryBuilder = queryBuilder.eq('seller_id', sellerId);
 
         if (location) {
             queryBuilder = queryBuilder.ilike('location', `%${location}%`);
