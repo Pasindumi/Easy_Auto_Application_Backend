@@ -5,7 +5,7 @@ import {
 
     getBrandsByType, createBrand, updateBrand, deleteBrand, getAllBrands,
     getModelsByType, createModel, deleteModel, getModelsByBrand,
-    getConditionsByType, createCondition, deleteCondition
+    getConditionsByType, createCondition, deleteCondition, getAllConditions
 } from '../controllers/vehicleConfigController.js';
 import { protectAdmin } from '../middlewares/adminAuthMiddleware.js';
 import multer from 'multer';
@@ -26,6 +26,7 @@ router.get('/brands', getAllBrands); // GET /api/vehicle-config/brands?type_id=.
 router.get('/brands/:typeId', getBrandsByType);
 router.get('/models/:typeId', getModelsByType);
 router.get('/models/by-brand/:brandId', getModelsByBrand);
+router.get('/conditions', getAllConditions);
 router.get('/conditions/:typeId', getConditionsByType);
 
 // Admin Routes (Write access)
