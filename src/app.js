@@ -19,6 +19,7 @@ import reviewRoutes from "./routes/reviewRoutes.js";
 import chatRoutes from "./routes/chatRoutes.js";
 import appReviewRoutes from "./routes/appReviewRoutes.js";
 import rentalRoutes from "./routes/rentalRoutes.js";
+import statsRoutes from "./routes/statsRoutes.js";
 import startCronJobs from "./utils/cronJobs.js";
 
 const app = express();
@@ -74,6 +75,8 @@ app.use("/api/boosts", boostRoutes); // Boost routes
 app.use("/api/reviews", reviewRoutes); // Review routes
 app.use("/api/chat", chatRoutes); // Chat routes
 app.use("/api/app-reviews", appReviewRoutes); // App Review routes
+app.use("/api/stats", statsRoutes); // Stats routes
+
 
 // Start Cron Jobs
 startCronJobs();
