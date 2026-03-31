@@ -110,7 +110,7 @@ export const initiatePayment = async (req, res) => {
         const hash = getMd5(hashString);
 
         // 🔹 URLs
-        const BASE_URL = process.env.BASE_URL || "http://localhost:5000";
+        const BASE_URL = process.env.BASE_URL || "https://easy-auto-application-backend-1.onrender.com";
         const RETURN_URL = `${BASE_URL}/api/payment/return-success`; // Frontend redirect
         const CANCEL_URL = `${BASE_URL}/api/payment/cancel`;
         const NOTIFY_URL = process.env.PAYHERE_NOTIFY_URL || `${BASE_URL}/api/payment/notify`;
