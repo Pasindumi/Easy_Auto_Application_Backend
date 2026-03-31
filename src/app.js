@@ -26,7 +26,13 @@ const app = express();
 
 const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(",")
-  : ["http://localhost:3000", "http://localhost:5173", "http://localhost:19006"];
+  : [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://localhost:19006",
+    "http://localhost:8081",
+    "http://localhost:19000"
+  ];
 
 app.use(cors({
   origin: (origin, callback) => {
@@ -35,6 +41,7 @@ app.use(cors({
     if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV === "development") {
       callback(null, true);
     } else {
+      console.log('CORS blocked origin:', origin);
       callback(new Error("Not allowed by CORS"));
     }
   },
@@ -42,6 +49,11 @@ app.use(cors({
 }));
 app.use(express.json());
 app.use(morgan("dev"));
+
+// Health Check
+app.get("/health", (req, res) => {
+  res.json({ status: "ok", timestamp: new Date().toISOString() });
+});
 
 // Initialize Clerk middleware globally
 // This makes req.auth available on all routes
