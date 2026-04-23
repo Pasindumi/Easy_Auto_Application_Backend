@@ -21,11 +21,22 @@ export const getVehicleTypes = async (req, res) => {
 export const createVehicleType = async (req, res) => {
     const { type_name, expiry_days } = req.body;
     const adminId = req.user.id;
+    const file = req.file;
 
     try {
+        let imageUrl = null;
+        if (file) {
+            imageUrl = await uploadFileToS3(file.buffer, file.originalname, file.mimetype, 'vehicle_types');
+        }
+
         const { data, error } = await supabase
             .from('vehicle_types')
-            .insert([{ type_name, expiry_days: expiry_days || 30, created_by_admin: adminId }])
+            .insert([{
+                type_name,
+                expiry_days: expiry_days || 30,
+                type_image: imageUrl,
+                created_by_admin: adminId
+            }])
 
             .select()
             .single();
@@ -61,12 +72,18 @@ export const updateVehicleTypeStatus = async (req, res) => {
 export const updateVehicleType = async (req, res) => {
     const { id } = req.params;
     const { type_name, expiry_days, status } = req.body;
+    const file = req.file;
 
     try {
         const updateData = {};
         if (type_name) updateData.type_name = type_name;
         if (expiry_days !== undefined) updateData.expiry_days = expiry_days;
         if (status) updateData.status = status;
+
+        if (file) {
+            const imageUrl = await uploadFileToS3(file.buffer, file.originalname, file.mimetype, 'vehicle_types');
+            updateData.type_image = imageUrl;
+        }
 
         const { data, error } = await supabase
             .from('vehicle_types')
@@ -79,6 +96,7 @@ export const updateVehicleType = async (req, res) => {
         res.json(data);
     } catch (error) {
         console.error('Vehicle Config Error:', error);
+        res.status(500).json({ message: error.message });
     }
 };
 
