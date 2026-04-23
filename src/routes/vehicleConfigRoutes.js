@@ -30,8 +30,8 @@ router.get('/conditions', getAllConditions);
 router.get('/conditions/:typeId', getConditionsByType);
 
 // Admin Routes (Write access)
-router.post('/types', protectAdmin, createVehicleType);
-router.put('/types/:id', protectAdmin, updateVehicleType);
+router.post('/types', protectAdmin, upload.single('type_image'), createVehicleType);
+router.put('/types/:id', protectAdmin, upload.single('type_image'), updateVehicleType);
 router.put('/types/:id/status', protectAdmin, updateVehicleTypeStatus);
 router.delete('/types/:id', protectAdmin, deleteVehicleType);
 
