@@ -4,10 +4,19 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY;
+const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const anonKey = process.env.SUPABASE_KEY;
 
-if (!supabaseUrl || !supabaseServiceKey) {
-  console.error('Supabase URL or Service Role Key is missing in environment variables');
+const supabaseServiceKey = serviceRoleKey || anonKey;
+
+if (!supabaseUrl) {
+  console.error('Supabase URL is missing in environment variables');
+}
+
+if (!serviceRoleKey) {
+  console.warn('Supabase Service Role Key is missing! Falling back to Anon Key. RLS will be active.');
+} else {
+  console.log('Supabase Service Role Key loaded successfully. RLS will be bypassed.');
 }
 
 // Use service role key to bypass RLS since we're using custom JWT authentication
