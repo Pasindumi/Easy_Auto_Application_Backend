@@ -1,6 +1,7 @@
 import { compileTemplate } from '../utils/emailTemplateCompiler.js';
 import * as notificationService from './notificationService.js';
 import * as subscriptionService from './subscriptionService.js';
+import * as pushNotificationService from './pushNotificationService.js';
 import dotenv from 'dotenv';
 import supabase from '../config/supabase.js';
 
@@ -88,6 +89,13 @@ export const sendPackagePurchaseEmail = async (userId, packageId, paymentId) => 
             result.error
         );
 
+        // Send Push Notification
+        await pushNotificationService.sendPackagePurchasePush(
+            userId,
+            pkgDetails.name,
+            amount
+        );
+
         return result;
 
     } catch (error) {
@@ -159,6 +167,13 @@ export const sendExpiryWarningEmail = async (userId, subscriptionId) => {
             `Subscription Expiry Warning`,
             result.success ? 'SENT' : 'FAILED',
             result.error
+        );
+
+        // Send Push Notification
+        await pushNotificationService.sendPackageExpiryPush(
+            userId,
+            subscription.price_items.name,
+            daysRemaining
         );
 
     } catch (error) {
@@ -247,6 +262,13 @@ export const sendAdLimitWarningEmail = async (userId, subscriptionId, usageStats
             `Ad Limit Warning`,
             result.success ? 'SENT' : 'FAILED',
             result.error
+        );
+
+        // Send Push Notification
+        await pushNotificationService.sendAdLimitWarningPush(
+            userId,
+            subscription.price_items.name,
+            totalPercentage.toFixed(0)
         );
 
     } catch (error) {
