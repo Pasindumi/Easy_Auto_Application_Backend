@@ -527,25 +527,33 @@ export const getRecommendedAds = async (req, res) => {
 
 // Get all ads (Public)
 export const getAds = async (req, res) => {
-    const { page, limit, brand, model, minPrice, maxPrice, vehicleTypeId, location, search, isHomepageBanner, isPopupPromotion, sellerId } = req.query;
+    const { page, limit, brand, model, condition, fuelType, transmission, minPrice, maxPrice, vehicleTypeId, location, search, isHomepageBanner, isPopupPromotion, sellerId } = req.query;
     const pageInt = parseInt(page) || 1;
     const limitInt = parseInt(limit) || 10;
     const start = (pageInt - 1) * limitInt;
     const end = start + limitInt - 1;
 
     try {
+        let selectStr = `
+            *,
+            AdImage(*),
+            attributes:car_details_attribute_values(
+                attribute_id,
+                value,
+                attribute:vehicle_attributes(attribute_name, unit, data_type)
+            )
+        `;
+
+        // Use !inner join if filtering by details to ensure parent rows are filtered
+        if (brand || model || condition || fuelType || transmission) {
+            selectStr += `, CarDetails!inner(*)`;
+        } else {
+            selectStr += `, CarDetails(*)`;
+        }
+
         let queryBuilder = supabase
             .from("CarAd")
-            .select(`
-                *,
-                CarDetails(*),
-                AdImage(*),
-                attributes:car_details_attribute_values(
-                    attribute_id,
-                    value,
-                    attribute:vehicle_attributes(attribute_name, unit, data_type)
-                )
-            `, { count: 'exact' })
+            .select(selectStr, { count: 'exact' })
             .eq("status", "ACTIVE")
             .or('is_banned.is.null,is_banned.eq.false');
 
@@ -555,8 +563,15 @@ export const getAds = async (req, res) => {
         if (vehicleTypeId) queryBuilder = queryBuilder.eq('vehicle_type_id', vehicleTypeId);
 
         // Brand/Model filtering needs joining CarDetails
-        if (brand) queryBuilder = queryBuilder.eq('CarDetails.brand', brand);
-        if (model) queryBuilder = queryBuilder.eq('CarDetails.model', model);
+        if (brand || model || condition || fuelType || transmission) {
+            console.log(`Filtering ads by: Brand: "${brand}", Model: "${model}", Condition: "${condition}"`);
+            if (brand) queryBuilder = queryBuilder.ilike('CarDetails.brand', brand);
+            if (model) queryBuilder = queryBuilder.ilike('CarDetails.model', model);
+            if (condition) queryBuilder = queryBuilder.ilike('CarDetails.condition', condition);
+            if (fuelType) queryBuilder = queryBuilder.ilike('CarDetails.fuel_type', fuelType);
+            if (transmission) queryBuilder = queryBuilder.ilike('CarDetails.transmission', transmission);
+        }
+
         if (sellerId) queryBuilder = queryBuilder.eq('seller_id', sellerId);
 
         if (location) {

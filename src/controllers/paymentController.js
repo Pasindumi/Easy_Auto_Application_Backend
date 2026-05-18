@@ -95,9 +95,10 @@ export const initiatePayment = async (req, res) => {
             return res.status(500).json({ success: false, message: "Failed to create payment record." });
         }
 
-        // 🔹 Credentials (User Provided)
-        const MERCHANT_ID = '1233627';
-        const MERCHANT_SECRET = "MTk5NjMyMDQyNjE1NjM3MjI5NzczMDc0Nzk2NDk2NzM5NzU1NjAy";
+        // 🔹 Credentials (From Environment)
+        const MERCHANT_ID = process.env.PAYHERE_MERCHANT_ID || '1233627';
+        const MERCHANT_SECRET = process.env.PAYHERE_MERCHANT_SECRET || "MTk5NjMyMDQyNjE1NjM3MjI5NzczMDc0Nzk2NDk2NzM5NzU1NjAy";
+        const IS_SANDBOX = process.env.PAYHERE_SANDBOX === 'true';
 
         // 🔹 Format Amount
         const amountFormatted = parseFloat(amount).toFixed(2);
@@ -105,17 +106,37 @@ export const initiatePayment = async (req, res) => {
 
         // 🔹 Generate Hash
         const getMd5 = (str) => crypto.createHash("md5").update(str).digest("hex").toUpperCase();
-        const hashedSecret = getMd5(MERCHANT_SECRET);
-        const hashString = MERCHANT_ID + order_id + amountFormatted + currencyVal + hashedSecret;
+
+        // PayHere Hash Formula: UpperCase(MD5(MerchantID + OrderID + Amount + Currency + UpperCase(MD5(Secret))))
+        const mID = String(MERCHANT_ID).trim();
+        const oID = String(order_id).trim();
+        const amt = parseFloat(amount).toFixed(2);
+        const curr = String(currencyVal).trim();
+        const hashedSecret = getMd5(MERCHANT_SECRET.trim());
+
+        const hashString = mID + oID + amt + curr + hashedSecret;
         const hash = getMd5(hashString);
 
+        console.log("--- DEBUG: Updated Hash Components ---");
+        console.log("Merchant ID:", mID);
+        console.log("Order ID:", oID);
+        console.log("Amount:", amt);
+        console.log("Currency:", curr);
+        console.log("Secret (First 5):", MERCHANT_SECRET.substring(0, 5));
+        console.log("Final Hash Output:", hash);
+        console.log("---------------------------------------");
+
         // 🔹 URLs
-        const BASE_URL = process.env.BASE_URL || "http://localhost:5000";
-        const RETURN_URL = `${BASE_URL}/api/payment/return-success`; // Frontend redirect
+        const BASE_URL = process.env.BASE_URL || "https://easy-auto-application-backend-1.onrender.com";
+        const RETURN_URL = `${BASE_URL}/api/payment/return-success`;
         const CANCEL_URL = `${BASE_URL}/api/payment/cancel`;
         const NOTIFY_URL = process.env.PAYHERE_NOTIFY_URL || `${BASE_URL}/api/payment/notify`;
 
-        console.log("Using Notify URL:", NOTIFY_URL);
+        const ACTION_URL = IS_SANDBOX
+            ? "https://sandbox.payhere.lk/pay/checkout"
+            : "https://www.payhere.lk/pay/checkout";
+
+        console.log(`Using ${IS_SANDBOX ? 'SANDBOX' : 'LIVE'} Checkout URL`);
 
         // 🔹 Generate HTML
         const html = `
@@ -129,13 +150,13 @@ export const initiatePayment = async (req, res) => {
                     </style>
                 </head>
                 <body onload="document.getElementById('payhere_form').submit();">
-                    <form id="payhere_form" method="post" action="https://sandbox.payhere.lk/pay/checkout">
+                    <form id="payhere_form" method="post" action="${ACTION_URL}">
                         <input type="hidden" name="merchant_id" value="${MERCHANT_ID}" />
                         <input type="hidden" name="return_url" value="${RETURN_URL}" />
                         <input type="hidden" name="cancel_url" value="${CANCEL_URL}" />
                         <input type="hidden" name="notify_url" value="${NOTIFY_URL}" />
                         <input type="hidden" name="order_id" value="${order_id}" />
-                        <input type="hidden" name="items" value="${items}" />
+                        <input type="hidden" name="items" value="${items || 'Product Purchase'}" />
                         <input type="hidden" name="currency" value="${currencyVal}" />
                         <input type="hidden" name="amount" value="${amountFormatted}" />
                         <input type="hidden" name="first_name" value="${first_name || 'User'}" />
@@ -146,8 +167,8 @@ export const initiatePayment = async (req, res) => {
                         <input type="hidden" name="city" value="${city || ''}" />
                         <input type="hidden" name="country" value="${country || ''}" />
                         <input type="hidden" name="hash" value="${hash}" />
-                        <input type="hidden" name="custom_1" value="${userId}" />
-                        <input type="hidden" name="custom_2" value="${packageId || rentalAdId || ''}" />
+                        <input type="hidden" name="custom_1" value="${adId || rentalAdId || packageId || userId}" />
+                        <input type="hidden" name="custom_2" value="${rentalAdId ? 'rental' : (adId ? 'car' : (packageId ? 'package' : 'user'))}" />
                     </form>
                     <div style="text-align:center">
                         <div class="loader" style="margin:0 auto 10px;"></div>
@@ -312,11 +333,11 @@ export const handlePaymentNotify = async (req, res) => {
             payhere_currency,
             status_code,
             md5sig,
-            custom_1, // userId
-            custom_2  // packageId
+            custom_1, // This is the Ad ID (from frontend)
+            custom_2  // This is the Ad Type (car/rental)
         } = req.body;
 
-        const MERCHANT_SECRET = "MTk5NjMyMDQyNjE1NjM3MjI5NzczMDc0Nzk2NDk2NzM5NzU1NjAy"; // Same secret
+        const MERCHANT_SECRET = process.env.PAYHERE_MERCHANT_SECRET;
 
         // 1. Verify Hash
         const getMd5 = (str) => crypto.createHash("md5").update(str).digest("hex").toUpperCase();
@@ -324,8 +345,8 @@ export const handlePaymentNotify = async (req, res) => {
         const hashString = merchant_id + order_id + payhere_amount + payhere_currency + status_code + hashedSecret;
         const localMd5 = getMd5(hashString);
 
-        if (localMd5 !== md5sig) {
-            console.error("Hash Mismatch! Potential Fraud.");
+        if (localMd5 !== md5sig.toUpperCase()) {
+            console.error("Hash Mismatch! Expected:", localMd5, "Received:", md5sig);
             return res.status(400).send("Hash Mismatch");
         }
 
@@ -333,118 +354,118 @@ export const handlePaymentNotify = async (req, res) => {
         // status_code: 2 = Success, 0 = Pending, -1 = Canceled, -2 = Failed, -3 = Chargedback
         let paymentStatus = 'PENDING';
         if (status_code == '2') paymentStatus = 'SUCCESS';
+        else if (status_code == '0') paymentStatus = 'PENDING';
         else if (status_code == '-1') paymentStatus = 'CANCELLED';
         else if (status_code == '-2') paymentStatus = 'FAILED';
 
-        const { error: updateError } = await supabase
+        // Update the payment record and select results
+        const { data: payments, error: updateError } = await supabase
             .from('payments')
             .update({
                 status: paymentStatus,
                 transaction_id: payment_id
             })
-            .eq('order_id', order_id);
+            .eq('order_id', order_id)
+            .select('*');
 
         if (updateError) {
-            console.error("Error updating payment:", updateError);
-            // Don't error out request, just log it. We verified hash.
+            console.error("Error updating payment record:", updateError);
         }
 
-        // 3. If Success, Assign Package
+        const payment = payments && payments.length > 0 ? payments[0] : null;
+
+        if (!payment) {
+            console.error(`No payment record found for order_id: ${order_id}`);
+            return res.status(200).send("OK");
+        }
+
+        // 3. If Success, Perform Activation Logic
         if (paymentStatus === 'SUCCESS') {
-            const userId = custom_1;
-            const packageId = custom_2;
+            const { ad_id, rental_ad_id, package_id, user_id } = payment;
 
-            if (userId && packageId) {
-                // Fetch Payment Record to check for ad_id and differentiate Boost vs Subscription vs Rental
-                const { data: payRecord } = await supabase
-                    .from('payments')
-                    .select('id, ad_id, rental_ad_id, package_id, price_items(item_type)')
-                    .eq('order_id', order_id)
+            // Handle Package/Boost Activation
+            if (package_id) {
+                // Fetch Package Details
+                const { data: pkgData } = await supabase.from('price_items').select('item_type').eq('id', package_id).single();
+
+                // Fetch Duration
+                const { data: featData } = await supabase
+                    .from('package_features')
+                    .select('feature_value')
+                    .eq('price_item_id', package_id)
+                    .eq('feature_key', 'DURATION_DAYS')
                     .single();
+                const durationDays = featData ? parseInt(featData.feature_value) : 30;
 
-                if (payRecord && payRecord.rental_ad_id) {
-                    // It's a Rental Ad Payment!
-                    console.log(`Applying Payment to Rental Ad ${payRecord.rental_ad_id}`);
-
-                    // 1. Activate the Rental Ad
-                    // Fetch duration days from the vehicle type linked to rental_ad, or default to 30
-                    const { data: rentAd } = await supabase
-                        .from('rental_ads')
-                        .select('vehicle_types(expiry_days)')
-                        .eq('id', payRecord.rental_ad_id)
-                        .single();
-
-                    const expiryDays = rentAd?.vehicle_types?.expiry_days || 30;
-                    const expiryDate = new Date();
-                    expiryDate.setDate(expiryDate.getDate() + expiryDays);
-
-                    await supabase
-                        .from('rental_ads')
-                        .update({ status: 'ACTIVE', expiry_date: expiryDate.toISOString() })
-                        .eq('id', payRecord.rental_ad_id);
-
-                    // 2. We can still apply package logic if they used a subscription/package
-                    // For now, if packageId is present, we log usage or apply subscription like normal
-                } else if (payRecord && payRecord.price_items?.item_type === 'BOOST_PACKAGE') {
-                    // It's a Boost!
-                    console.log(`Applying Boost Package ${packageId} to Ad ${payRecord.ad_id}`);
-
-                    // Fetch duration days from package features
-                    const { data: featData } = await supabase
-                        .from('package_features')
-                        .select('feature_value')
-                        .eq('price_item_id', packageId)
-                        .eq('feature_key', 'DURATION_DAYS')
-                        .single();
-
-                    const durationDays = featData ? parseInt(featData.feature_value) : 30;
-
-                    const { applyBoostToAd } = await import('./boostController.js');
-                    await applyBoostToAd({
-                        adId: payRecord.ad_id,
-                        packageId: packageId,
-                        paymentId: payRecord.id,
-                        durationDays
-                    });
-
+                if (pkgData?.item_type === 'BOOST_PACKAGE' && (ad_id || rental_ad_id)) {
+                    // It's a boost!
+                    const targetId = ad_id || rental_ad_id;
+                    try {
+                        const { applyBoostToAd } = await import('./boostController.js');
+                        await applyBoostToAd({
+                            adId: targetId,
+                            packageId: package_id,
+                            paymentId: payment.id,
+                            durationDays
+                        });
+                        console.log(`Boost Package ${package_id} applied to Ad ${targetId}`);
+                    } catch (boostError) {
+                        console.error("Boost application error:", boostError);
+                    }
                 } else {
-                    // Regular Subscription Logic
-                    // Fetch Package Duration
-                    const { data: featData } = await supabase
-                        .from('package_features')
-                        .select('feature_value')
-                        .eq('price_item_id', packageId)
-                        .eq('feature_key', 'DURATION_DAYS')
-                        .single();
-
-                    const durationDays = featData ? parseInt(featData.feature_value) : 30;
-
+                    // Regular Subscription
                     const startDate = new Date();
                     const endDate = new Date();
                     endDate.setDate(startDate.getDate() + (isNaN(durationDays) ? 30 : durationDays));
 
-                    const { error: subError } = await supabase
+                    await supabase
                         .from('user_subscriptions')
                         .insert({
-                            user_id: userId,
-                            package_id: packageId,
+                            user_id: user_id,
+                            package_id: package_id,
+                            payment_id: payment.id,
                             start_date: startDate.toISOString(),
                             end_date: endDate.toISOString(),
                             status: 'ACTIVE'
                         });
-
-                    if (subError) {
-                        console.error("Error creating subscription:", subError);
-                    } else {
-                        console.log(`Package ${packageId} assigned to User ${userId} for ${durationDays} days`);
-                    }
+                    console.log(`Subscription ${package_id} activated for User ${user_id}`);
                 }
 
-                // Re-fetch payment ID for email if needed
-                const { data: completePayment } = await supabase.from('payments').select('id').eq('order_id', order_id).single();
+                // Send Email Notification
+                sendPackagePurchaseEmail(user_id, package_id, payment.id).catch(err => console.error("Email trigger error:", err));
+            }
 
-                if (completePayment) {
-                    sendPackagePurchaseEmail(userId, packageId, completePayment.id).catch(err => console.error("Email trigger error:", err));
+            // Handle Ad Activation
+            if (ad_id || rental_ad_id) {
+                const targetId = ad_id || rental_ad_id;
+                const tableName = rental_ad_id ? 'rental_ads' : 'CarAd';
+
+                // Fetch ad details to set proper expiry
+                const { data: adData } = await supabase
+                    .from(tableName)
+                    .select('vehicle_types(expiry_days), status')
+                    .eq('id', targetId)
+                    .single();
+
+                if (adData && adData.status !== 'ACTIVE') {
+                    const expiryDays = adData.vehicle_types?.expiry_days || 30;
+                    const expiryDate = new Date();
+                    expiryDate.setDate(expiryDate.getDate() + expiryDays);
+
+                    const { error: adError } = await supabase
+                        .from(tableName)
+                        .update({
+                            status: 'ACTIVE',
+                            expiry_date: expiryDate.toISOString(),
+                            payment_status: 'PAID'
+                        })
+                        .eq('id', targetId);
+
+                    if (adError) {
+                        console.error(`Error activating ${tableName} ad ${targetId}:`, adError);
+                    } else {
+                        console.log(`Success! Ad ${targetId} is now ACTIVE.`);
+                    }
                 }
             }
         }
@@ -452,7 +473,7 @@ export const handlePaymentNotify = async (req, res) => {
         return res.status(200).send("OK");
 
     } catch (error) {
-        console.error("Error processing notification:", error);
+        console.error("Critical error in handlePaymentNotify:", error);
         return res.status(500).send("Internal Server Error");
     }
 };
