@@ -1,6 +1,6 @@
 import crypto from "crypto";
 import supabase from "../config/supabase.js";
-import { sendPackagePurchaseEmail } from "../services/emailService.js";
+import { sendPackagePurchaseEmail, sendSubscriptionCancellationEmail } from "../services/emailService.js";
 
 /**
  * Generates the PayHere MD5 Hash for secure checkout.
@@ -576,6 +576,13 @@ export const unsubscribeUser = async (req, res) => {
         const { data, error } = await query.select();
 
         if (error) throw error;
+
+        // Fire email + in-app notification (non-blocking)
+        const cancelledRow = data && data[0];
+        const cancelledId = cancelledRow?.id || subscriptionId;
+        sendSubscriptionCancellationEmail(userId, cancelledId).catch(err =>
+            console.error('[unsubscribeUser] Notification error:', err)
+        );
 
         return res.json({ success: true, message: "Unsubscribed successfully" });
 

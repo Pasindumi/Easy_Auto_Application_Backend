@@ -1,7 +1,7 @@
 import { compileTemplate } from '../utils/emailTemplateCompiler.js';
 import * as notificationService from './notificationService.js';
 import * as subscriptionService from './subscriptionService.js';
-import * as pushNotificationService from './pushNotificationService.js';
+import * as inAppNotificationService from './inAppNotificationService.js';
 import dotenv from 'dotenv';
 import supabase from '../config/supabase.js';
 
@@ -89,8 +89,8 @@ export const sendPackagePurchaseEmail = async (userId, packageId, paymentId) => 
             result.error
         );
 
-        // Send Push Notification
-        await pushNotificationService.sendPackagePurchasePush(
+        // Send In-App Notification
+        await inAppNotificationService.notifyPackagePurchase(
             userId,
             pkgDetails.name,
             amount
@@ -169,8 +169,8 @@ export const sendExpiryWarningEmail = async (userId, subscriptionId) => {
             result.error
         );
 
-        // Send Push Notification
-        await pushNotificationService.sendPackageExpiryPush(
+        // Send In-App Notification
+        await inAppNotificationService.notifyPackageExpiry(
             userId,
             subscription.price_items.name,
             daysRemaining
@@ -264,8 +264,8 @@ export const sendAdLimitWarningEmail = async (userId, subscriptionId, usageStats
             result.error
         );
 
-        // Send Push Notification
-        await pushNotificationService.sendAdLimitWarningPush(
+        // Send In-App Notification
+        await inAppNotificationService.notifyAdLimitWarning(
             userId,
             subscription.price_items.name,
             totalPercentage.toFixed(0)
@@ -275,3 +275,88 @@ export const sendAdLimitWarningEmail = async (userId, subscriptionId, usageStats
         console.error('Error in sendAdLimitWarningEmail:', error);
     }
 };
+
+/**
+ * Send subscription cancellation email + in-app notification.
+ *
+ * @param {string} userId
+ * @param {string} subscriptionId  - The cancelled user_subscription row ID
+ */
+export const sendSubscriptionCancellationEmail = async (userId, subscriptionId) => {
+    try {
+        // Fetch subscription with joined user and package name
+        const { data: subscription, error: subError } = await supabase
+            .from('user_subscriptions')
+            .select(`
+                *,
+                users (email, name),
+                price_items (name)
+            `)
+            .eq('id', subscriptionId)
+            .single();
+
+        if (subError || !subscription) {
+            // Fallback: fetch by userId if subscriptionId is unavailable
+            console.warn('[EmailService] Could not fetch subscription by ID, trying userId fallback');
+            const { data: fallback } = await supabase
+                .from('user_subscriptions')
+                .select(`*, users (email, name), price_items (name)`)
+                .eq('user_id', userId)
+                .eq('status', 'CANCELLED')
+                .order('updated_at', { ascending: false })
+                .limit(1)
+                .single();
+
+            if (!fallback) throw new Error('Subscription not found');
+            Object.assign(subscription || {}, fallback);
+        }
+
+        const packageName = subscription.price_items?.name || 'your package';
+        const userName = subscription.users?.name || 'User';
+        const userEmail = subscription.users?.email;
+        const cancelledDate = new Date().toLocaleDateString();
+        const effectiveUntil = subscription.end_date
+            ? new Date(subscription.end_date).toLocaleDateString()
+            : cancelledDate;
+
+        // 1. Send Email
+        if (userEmail) {
+            const templateData = {
+                userName,
+                packageName,
+                cancelledDate,
+                effectiveUntil,
+                packagesUrl: `${BASE_URL}/packages`,
+            };
+
+            const html = await compileTemplate('subscriptionCancelled', templateData);
+
+            const result = await notificationService.sendEmail(
+                userEmail,
+                `Subscription Cancelled: ${packageName}`,
+                html
+            );
+
+            await notificationService.logNotification(
+                userId,
+                subscriptionId,
+                'SUBSCRIPTION_CANCELLED',
+                userEmail,
+                `Subscription Cancelled: ${packageName}`,
+                result.success ? 'SENT' : 'FAILED',
+                result.error
+            );
+        }
+
+        // 2. In-App Notification
+        await inAppNotificationService.notifySubscriptionCancelled(
+            userId,
+            packageName,
+            effectiveUntil
+        );
+
+    } catch (error) {
+        console.error('Error in sendSubscriptionCancellationEmail:', error);
+    }
+};
+
