@@ -8,7 +8,12 @@ const toSafeInt = (val) => (!val || val === "" || val === "undefined") ? null : 
 
 export const createRentalAd = async (req, res) => {
     try {
-        const seller_id = req.user.id;
+        const seller_id = toSafeUUID(req.user?.id);
+
+        if (!seller_id) {
+            return res.status(401).json({ success: false, message: "Unauthorized: Seller ID missing." });
+        }
+
         const {
             title, location, description,
             price_per_day, price_per_week, price_per_month, extra_mileage_fee, security_deposit,
@@ -20,13 +25,17 @@ export const createRentalAd = async (req, res) => {
 
         const safeVehicleTypeId = toSafeUUID(vehicle_type_id);
 
+        console.log(`Creating rental ad for seller: ${seller_id}, vehicle_type: ${safeVehicleTypeId}`);
+
         // 1. Create Rental Ad record
         const { data: adData, error: adError } = await supabase
             .from("rental_ads")
             .insert([{
                 seller_id,
                 vehicle_type_id: safeVehicleTypeId,
-                title, location, description,
+                title,
+                location,
+                description,
                 price_per_day: toSafeNumeric(price_per_day) || 0,
                 price_per_week: toSafeNumeric(price_per_week) || 0,
                 price_per_month: toSafeNumeric(price_per_month) || 0,
@@ -45,18 +54,29 @@ export const createRentalAd = async (req, res) => {
             .select()
             .single();
 
-        if (adError) throw adError;
+        if (adError) {
+            console.error("Supabase Rental Ad Insert Error:", adError);
+            throw adError;
+        }
+
         const adId = adData.id;
 
         // 2. Create Details record
         const { error: detailsError } = await supabase.from("rental_ad_details").insert([{
-            ad_id: adId, condition, brand, model,
-            year: toSafeInt(year), mileage: toSafeNumeric(mileage),
+            ad_id: adId,
+            condition,
+            brand,
+            model,
+            year: toSafeInt(year),
+            mileage: toSafeNumeric(mileage),
             engine_capacity: toSafeNumeric(engine_capacity),
-            fuel_type, transmission, body_type
+            fuel_type,
+            transmission,
+            body_type
         }]);
 
         if (detailsError) {
+            console.error("Supabase Rental Details Insert Error:", detailsError);
             await supabase.from("rental_ads").delete().eq("id", adId);
             throw detailsError;
         }
@@ -72,7 +92,8 @@ export const createRentalAd = async (req, res) => {
                 const imageRecords = uploadedUrls.map((url, index) => ({
                     ad_id: adId, image_url: url, is_primary: index === 0
                 }));
-                await supabase.from("rental_ad_images").insert(imageRecords);
+                const { error: imgError } = await supabase.from("rental_ad_images").insert(imageRecords);
+                if (imgError) console.error("Rental Images Insert Error:", imgError);
             }
 
             // Upload Specific Documents
@@ -85,28 +106,38 @@ export const createRentalAd = async (req, res) => {
             for (const field of docFields) {
                 const file = req.files[field.key]?.[0];
                 if (file) {
-                    const url = await uploadFileToS3(file.buffer, file.originalname, file.mimetype);
-                    await supabase.from("rental_ad_documents").insert({
-                        ad_id: adId,
-                        document_type: field.type,
-                        document_url: url,
-                        status: 'PENDING'
-                    });
+                    try {
+                        const url = await uploadFileToS3(file.buffer, file.originalname, file.mimetype);
+                        const { error: docError } = await supabase.from("rental_ad_documents").insert({
+                            ad_id: adId,
+                            document_type: field.type,
+                            document_url: url,
+                            status: 'PENDING'
+                        });
+                        if (docError) console.error(`Document Insert Error (${field.type}):`, docError);
+                    } catch (uploadErr) {
+                        console.error(`S3 Upload Error (${field.type}):`, uploadErr);
+                    }
                 }
             }
         }
 
         // 4. Set Initial Availability Calendar (Optional)
         if (calendar_start_date && calendar_end_date) {
-            await supabase.from("rental_ad_calendar").insert([{
+            const { error: calError } = await supabase.from("rental_ad_calendar").insert([{
                 ad_id: adId, start_date: calendar_start_date, end_date: calendar_end_date, status: 'AVAILABLE'
             }]);
+            if (calError) console.error("Rental Calendar Insert Error:", calError);
         }
 
         res.status(201).json({ success: true, message: "Rental ad created successfully!", data: adData });
     } catch (error) {
-        console.error("Error creating rental ad:", error);
-        res.status(500).json({ success: false, message: error.message });
+        console.error("Final catch in createRentalAd:", error);
+        res.status(500).json({
+            success: false,
+            message: error.message || "Failed to create rental ad",
+            details: error.details || error.hint || null
+        });
     }
 };
 
@@ -219,17 +250,31 @@ export const getRentalAds = async (req, res) => {
     const end = start + limitInt - 1;
 
     try {
+        let selectStr = `*, images:rental_ad_images(*)`;
+
+        // Use !inner join if filtering by details to ensure parent rows are filtered
+        if (brand || model) {
+            selectStr += `, details:rental_ad_details!inner(*)`;
+        } else {
+            selectStr += `, details:rental_ad_details(*)`;
+        }
+
         let queryBuilder = supabase
             .from("rental_ads")
-            .select(`*, details:rental_ad_details(*), images:rental_ad_images(*)`, { count: 'exact' })
+            .select(selectStr, { count: 'exact' })
             .eq("status", "ACTIVE")
             .or('is_banned.is.null,is_banned.eq.false');
 
         if (minPrice) queryBuilder = queryBuilder.gte("price_per_day", minPrice);
         if (maxPrice) queryBuilder = queryBuilder.lte("price_per_day", maxPrice);
         if (vehicleTypeId) queryBuilder = queryBuilder.eq('vehicle_type_id', vehicleTypeId);
-        if (brand) queryBuilder = queryBuilder.eq('details.brand', brand);
-        if (model) queryBuilder = queryBuilder.eq('details.model', model);
+
+        if (brand || model) {
+            console.log(`Filtering rentals by Brand: "${brand}", Model: "${model}"`);
+            if (brand) queryBuilder = queryBuilder.ilike('details.brand', brand);
+            if (model) queryBuilder = queryBuilder.ilike('details.model', model);
+        }
+
         if (location) queryBuilder = queryBuilder.ilike('location', `%${location}%`);
         if (search) queryBuilder = queryBuilder.ilike('title', `%${search}%`);
 
