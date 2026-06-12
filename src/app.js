@@ -20,7 +20,7 @@ import chatRoutes from "./routes/chatRoutes.js";
 import appReviewRoutes from "./routes/appReviewRoutes.js";
 import rentalRoutes from "./routes/rentalRoutes.js";
 import statsRoutes from "./routes/statsRoutes.js";
-import deviceRoutes from "./routes/deviceRoutes.js";
+import notificationRoutes from "./routes/notificationRoutes.js";
 import startCronJobs from "./utils/cronJobs.js";
 
 const app = express();
@@ -90,10 +90,10 @@ app.use("/api/reviews", reviewRoutes); // Review routes
 app.use("/api/chat", chatRoutes); // Chat routes
 app.use("/api/app-reviews", appReviewRoutes); // App Review routes
 app.use("/api/stats", statsRoutes); // Stats routes
-app.use("/api/devices", deviceRoutes); // Device/Push notification routes
+app.use("/api/notifications", notificationRoutes); // In-App Notification routes
 
 // Debug: Log all registered routes
-console.log('[Routes] Device routes registered at /api/devices');
+console.log('[Routes] Notification routes registered at /api/notifications');
 
 // Start Cron Jobs
 startCronJobs();

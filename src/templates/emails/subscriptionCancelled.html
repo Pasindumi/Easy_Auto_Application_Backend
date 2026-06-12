@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 5px; }
+        .header { background-color: #dc3545; color: white; padding: 10px; text-align: center; border-radius: 5px 5px 0 0; }
+        .content { padding: 20px; }
+        .info-box { margin-top: 15px; background-color: #fff3cd; border: 1px solid #ffc107; padding: 15px; border-radius: 5px; }
+        .footer { margin-top: 20px; font-size: 12px; color: #777; text-align: center; }
+        .button { display: inline-block; padding: 10px 20px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px; margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h2>Subscription Cancelled</h2>
+        </div>
+        <div class="content">
+            <p>Dear {{userName}},</p>
+            <p>Your <strong>{{packageName}}</strong> subscription has been successfully cancelled.</p>
+
+            <div class="info-box">
+                <h3>Cancellation Details</h3>
+                <ul>
+                    <li><strong>Package:</strong> {{packageName}}</li>
+                    <li><strong>Cancelled On:</strong> {{cancelledDate}}</li>
+                    <li><strong>Effective Until:</strong> {{effectiveUntil}}</li>
+                </ul>
+                <p>Your ads will remain active until the subscription period ends on <strong>{{effectiveUntil}}</strong>.</p>
+            </div>
+
+            <p>We're sorry to see you go. If you change your mind, you can resubscribe anytime to get your listings back on top.</p>
+
+            <a href="{{packagesUrl}}" class="button">View Available Packages</a>
+        </div>
+        <div class="footer">
+            <p>If you did not request this cancellation, please contact our support team immediately.</p>
+            <p>&copy; Easy Auto. All rights reserved.</p>
+        </div>
+    </div>
+</body>
+</html>
