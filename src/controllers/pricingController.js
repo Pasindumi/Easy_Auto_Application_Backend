@@ -1,4 +1,5 @@
 import supabase from '../config/supabase.js';
+import { sendSubscriptionCancellationEmail } from "../services/emailService.js";
 
 // --- Price Items ---
 
@@ -563,6 +564,15 @@ export const unsubscribeUserPackage = async (req, res) => {
 
         if (data.length === 0) {
             return res.status(404).json({ error: "No active subscription found for this package." });
+        }
+
+        // Fire email + in-app notification (non-blocking)
+        const cancelledRow = data && data[0];
+        const cancelledId = cancelledRow?.id;
+        if (cancelledId) {
+            sendSubscriptionCancellationEmail(userId, cancelledId).catch(err =>
+                console.error('[unsubscribeUserPackage] Notification error:', err)
+            );
         }
 
         res.json({ message: "Subscription cancelled successfully", data });
