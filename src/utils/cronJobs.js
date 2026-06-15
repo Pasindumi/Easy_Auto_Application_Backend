@@ -26,6 +26,34 @@ const startCronJobs = () => {
         }
     });
 
+    cron.schedule("15 0 * * *", async () => {
+        console.log("Running Paused Ad Cleanup Job...");
+        try {
+            const cutoff = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+
+            const [{ error: carError }, { error: rentalError }] = await Promise.all([
+                supabase
+                    .from("CarAd")
+                    .update({ status: "DELETED", updated_at: new Date().toISOString() })
+                    .eq("status", "PAUSED")
+                    .lt("updated_at", cutoff),
+                supabase
+                    .from("rental_ads")
+                    .update({ status: "DELETED", updated_at: new Date().toISOString() })
+                    .eq("status", "PAUSED")
+                    .lt("updated_at", cutoff)
+            ]);
+
+            if (carError || rentalError) {
+                console.error("Error cleaning paused ads:", carError || rentalError);
+            } else {
+                console.log("Paused Ad Cleanup Job Completed.");
+            }
+        } catch (err) {
+            console.error("Paused Ad Cleanup Cron Job Failed:", err);
+        }
+    });
+
     // Run every hour to check for expired bans
     cron.schedule("0 * * * *", async () => {
         console.log("Running User Unban Job...");

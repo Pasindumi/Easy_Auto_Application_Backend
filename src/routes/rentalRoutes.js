@@ -3,6 +3,8 @@ import multer from 'multer';
 import {
     createRentalAd,
     updateRentalAd,
+    updateMyRentalAdStatus,
+    deleteRentalAd,
     getRentalAds,
     getRentalAdById,
     getMyRentalAds,
@@ -36,7 +38,9 @@ router.get("/my-ads", protect, getMyRentalAds); // GET /api/rentals/my-ads
 router.get("/", getRentalAds); // GET /api/rentals
 router.post("/", protect, uploadFields, createRentalAd); // POST /api/rentals
 router.get("/:id", getRentalAdById); // GET /api/rentals/:id
+router.put("/:id/status", protect, updateMyRentalAdStatus); // PUT /api/rentals/:id/status
 router.put("/:id", protect, uploadFields, updateRentalAd); // PUT /api/rentals/:id
+router.delete("/:id", protect, deleteRentalAd); // DELETE /api/rentals/:id
 
 // ============================================
 // ADMIN ROUTES

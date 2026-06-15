@@ -882,6 +882,58 @@ export const getMyAds = async (req, res) => {
     }
 };
 
+export const updateMyAdStatus = async (req, res) => {
+    const { id: adId } = req.params;
+    const userId = req.user.id;
+    const requestedStatus = String(req.body?.status || '').toUpperCase();
+    const allowedStatuses = ['ACTIVE', 'PAUSED', 'DELETED'];
+
+    if (!allowedStatuses.includes(requestedStatus)) {
+        return res.status(400).json({
+            success: false,
+            message: 'Invalid status. Allowed values are ACTIVE, PAUSED, and DELETED.'
+        });
+    }
+
+    try {
+        const { data: ad, error: fetchError } = await supabase
+            .from("CarAd")
+            .select("id, seller_id, status")
+            .eq("id", adId)
+            .single();
+
+        if (fetchError || !ad) {
+            return res.status(404).json({ success: false, message: "Ad not found" });
+        }
+
+        if (ad.seller_id !== userId) {
+            return res.status(403).json({ success: false, message: "You are not authorized to update this ad" });
+        }
+
+        if (ad.status === 'DELETED' && requestedStatus !== 'DELETED') {
+            return res.status(400).json({ success: false, message: "Deleted ads cannot be restored." });
+        }
+
+        const { data, error } = await supabase
+            .from("CarAd")
+            .update({ status: requestedStatus, updated_at: new Date().toISOString() })
+            .eq("id", adId)
+            .select()
+            .single();
+
+        if (error) throw error;
+
+        res.json({
+            success: true,
+            message: `Ad status updated to ${requestedStatus}`,
+            data
+        });
+    } catch (error) {
+        console.error("Error updating my ad status:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 // --- ADMIN FUNCTIONS ---
 
 // Admin: Get All Ads (with filters for Status)
@@ -1126,39 +1178,14 @@ export const deleteAd = async (req, res) => {
             return res.status(403).json({ success: false, message: "You are not authorized to delete this ad" });
         }
 
-        // 2. Delete related data (Cascade delete should ideally handle this in DB, but manual cleanup ensures it)
-        // AdImage, CarDetails, car_details_attribute_values, ad_boosts, etc.
-
-        // Delete Attributes
-        await supabase.from("car_details_attribute_values").delete().eq("ad_id", adId);
-
-        // Delete Details
-        await supabase.from("CarDetails").delete().eq("ad_id", adId);
-
-        // Delete Images
-        await supabase.from("AdImage").delete().eq("ad_id", adId);
-
-        // Delete Boosts (if any)
-        await supabase.from("ad_boosts").delete().eq("ad_id", adId);
-
-        // Nullify ad_id in payments (Preserves history while allowing ad deletion)
-        await supabase.from("payments").update({ ad_id: null }).eq("ad_id", adId);
-
-        // Delete from Wishlist
-        await supabase.from("wishlist").delete().eq("ad_id", adId);
-
-        // Delete from Reviews
-        await supabase.from("reviews").delete().eq("ad_id", adId);
-
-        // 3. Finally delete the CarAd record
         const { error: deleteError } = await supabase
             .from("CarAd")
-            .delete()
+            .update({ status: 'DELETED', updated_at: new Date().toISOString() })
             .eq("id", adId);
 
         if (deleteError) throw deleteError;
 
-        res.json({ success: true, message: "Ad deleted successfully" });
+        res.json({ success: true, message: "Ad moved to deleted status successfully" });
     } catch (error) {
         console.error("Error deleting ad:", error);
         res.status(500).json({ success: false, message: error.message });

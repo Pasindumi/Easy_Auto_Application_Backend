@@ -329,6 +329,91 @@ export const getMyRentalAds = async (req, res) => {
     }
 };
 
+export const updateMyRentalAdStatus = async (req, res) => {
+    const { id } = req.params;
+    const seller_id = req.user.id;
+    const requestedStatus = String(req.body?.status || '').toUpperCase();
+    const allowedStatuses = ['ACTIVE', 'PAUSED', 'DELETED'];
+
+    if (!allowedStatuses.includes(requestedStatus)) {
+        return res.status(400).json({
+            success: false,
+            message: 'Invalid status. Allowed values are ACTIVE, PAUSED, and DELETED.'
+        });
+    }
+
+    try {
+        const { data: ad, error: fetchError } = await supabase
+            .from("rental_ads")
+            .select("id, seller_id, status")
+            .eq("id", id)
+            .single();
+
+        if (fetchError || !ad) {
+            return res.status(404).json({ success: false, message: "Rental ad not found" });
+        }
+
+        if (ad.seller_id !== seller_id) {
+            return res.status(403).json({ success: false, message: "You are not authorized to update this rental ad" });
+        }
+
+        if (ad.status === 'DELETED' && requestedStatus !== 'DELETED') {
+            return res.status(400).json({ success: false, message: "Deleted ads cannot be restored." });
+        }
+
+        const { data, error } = await supabase
+            .from("rental_ads")
+            .update({ status: requestedStatus, updated_at: new Date().toISOString() })
+            .eq("id", id)
+            .select()
+            .single();
+
+        if (error) throw error;
+
+        res.json({
+            success: true,
+            message: `Rental ad status updated to ${requestedStatus}`,
+            data
+        });
+    } catch (error) {
+        console.error("Rental status update error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+export const deleteRentalAd = async (req, res) => {
+    const { id } = req.params;
+    const seller_id = req.user.id;
+
+    try {
+        const { data: ad, error: fetchError } = await supabase
+            .from("rental_ads")
+            .select("id, seller_id")
+            .eq("id", id)
+            .single();
+
+        if (fetchError || !ad) {
+            return res.status(404).json({ success: false, message: "Rental ad not found" });
+        }
+
+        if (ad.seller_id !== seller_id) {
+            return res.status(403).json({ success: false, message: "You are not authorized to delete this rental ad" });
+        }
+
+        const { error } = await supabase
+            .from("rental_ads")
+            .update({ status: 'DELETED', updated_at: new Date().toISOString() })
+            .eq("id", id);
+
+        if (error) throw error;
+
+        res.json({ success: true, message: "Rental ad moved to deleted status successfully" });
+    } catch (error) {
+        console.error("Rental delete error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 // ==========================================
 // ADMIN ROUTES
 // ==========================================
